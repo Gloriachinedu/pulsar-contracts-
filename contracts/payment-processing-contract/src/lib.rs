@@ -988,6 +988,9 @@ impl PaymentContract {
         if !merchant.active {
             return Err(PaymentError::MerchantInactive);
         }
+        // T-008: Reject duplicate signers so a single address cannot satisfy
+        // the full threshold alone.
+        // See: https://github.com/queenannaE/pulsar-contracts/issues/38
         let mut unique_signers = Vec::new(&env);
         for signer in required_signers.iter() {
             if unique_signers.contains(&signer) {
