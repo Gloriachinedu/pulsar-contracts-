@@ -473,6 +473,9 @@ fn test_refund_reason_length_limit() {
     );
 }
 
+/// T-009: A random caller who is neither the merchant nor an admin
+/// must receive `Unauthorized` when attempting to approve a refund.
+/// Closes: <https://github.com/queenannaE/pulsar-contracts/issues/39>
 #[test]
 fn test_approve_refund_unauthorized_fails() {
     let (env, client) = setup();
