@@ -68,6 +68,44 @@ jobs:
         run: cargo test --all-features --locked
         working-directory: contracts/payment-processing-contract
 
+  # T-011: Property-based tests — run as a separate CI job so failures are
+  # surfaced independently of the main unit-test suite.
+  # See docs/fuzz-and-property-tests.md for how to run locally.
+  property-tests:
+    name: Property-Based Tests
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get rustc version
+        id: rustc-version
+        run: echo "version=$(rustc --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-proptest-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-proptest-${{ steps.rustc-version.outputs.version }}-
+            ${{ runner.os }}-cargo-proptest-
+
+      - name: Run property-based tests
+        # Runs only the prop_ prefixed tests from prop_tests.rs with 512 cases.
+        # Set PROPTEST_CASES to a higher value to increase coverage in nightly/
+        # scheduled runs. See docs/fuzz-and-property-tests.md.
+        run: cargo test prop_ --all-features --locked
+        working-directory: contracts/payment-processing-contract
+        env:
+          PROPTEST_CASES: 512
+
   build:
     name: Build WASM
     runs-on: ubuntu-latest
