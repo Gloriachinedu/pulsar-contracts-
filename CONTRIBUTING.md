@@ -100,19 +100,34 @@ Open a GitHub Issue with:
 
 ## Issue Triage
 
+When an issue is opened a maintainer will triage it within the SLA window
+below, applying one or more labels and setting a priority.
+
 **Label taxonomy**
 
-- `bug` – a defect in the code or documentation.
-- `enhancement` – a new feature or improvement.
-- `security` – security‑related issue.
-- `documentation` – docs improvements or corrections.
-- `question` – user questions or usage help.
+| Label | Usage |
+|---|---|
+| `bug` | A defect in the code or documentation. |
+| `enhancement` | A new feature or improvement. |
+| `security` | Security-related issue; treated with elevated priority. |
+| `documentation` | Docs improvements or corrections. |
+| `question` | User questions or usage help. |
+| `good first issue` | Well-scoped task suitable for new contributors. |
+| `wontfix` | Out of scope or intentionally not addressed. |
+| `duplicate` | Duplicate of an existing open issue. |
+
+**Triage process**
+
+1. A maintainer reads the issue and asks for clarifying information if needed.
+2. The issue is labelled and assigned a priority (`P0`–`P3`).
+3. For bugs, the maintainer attempts to reproduce the issue and records the result in a comment.
+4. The issue is added to the project board or milestone if it will be actively worked.
 
 **SLA for first response**
 
-- All new issues receive an initial acknowledgement within **24 hours** on weekdays.
-- Critical security issues are responded to within **4 hours**.
-- Non‑critical issues aim for a response within **48 hours**.
+- All new issues receive an initial acknowledgement within **24 hours** on weekdays.
+- Critical security issues are responded to within **4 hours**.
+- Non-critical issues aim for a response within **48 hours**.
 
 ## Security Vulnerabilities
 
