@@ -3,10 +3,10 @@ import { useWallet } from './hooks/useWallet';
 import PaymentHistory from './components/PaymentHistory';
 import RefundManager from './components/RefundManager';
 import MerchantProfile from './components/MerchantProfile';
-import PayerPaymentHistory from './components/PayerPaymentHistory';
+import AdminPanel from './components/AdminPanel';
 import './App.css';
 
-const TABS = ['Payments', 'My History', 'Refunds', 'Profile'];
+const TABS = ['Payments', 'Refunds', 'Profile', 'Admin'];
 
 export default function App() {
   const { publicKey, connect, disconnect, error } = useWallet();
@@ -68,10 +68,10 @@ export default function App() {
           </nav>
 
           <div role="tabpanel" aria-label={tab} className="tab-content">
-            {tab === 'Payments'   && <PaymentHistory merchantAddress={publicKey} />}
-            {tab === 'My History' && <PayerPaymentHistory payerAddress={publicKey} />}
-            {tab === 'Refunds'    && <RefundManager  merchantAddress={publicKey} />}
-            {tab === 'Profile'    && <MerchantProfile publicKey={publicKey} />}
+            {tab === 'Payments' && <PaymentHistory merchantAddress={publicKey} />}
+            {tab === 'Refunds'  && <RefundManager  merchantAddress={publicKey} />}
+            {tab === 'Profile'  && <MerchantProfile publicKey={publicKey} />}
+            {tab === 'Admin'    && <AdminPanel      adminAddress={publicKey} />}
           </div>
         </main>
       )}

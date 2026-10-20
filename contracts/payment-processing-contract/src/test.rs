@@ -930,6 +930,10 @@ fn test_set_cleanup_period() {
     client.set_payment_cleanup_period(&admins(&env, &admin), &86400);
 }
 
+/// T-007: Passing `period = 0` to `set_payment_cleanup_period` must return
+/// `InvalidInput`. The zero-period guard exists in the implementation but
+/// was previously untested.
+/// Closes: <https://github.com/queenannaE/pulsar-contracts/issues/37>
 #[test]
 fn test_set_cleanup_period_zero_fails() {
     let (env, client) = setup();
@@ -941,6 +945,9 @@ fn test_set_cleanup_period_zero_fails() {
     );
 }
 
+/// T-007: A valid (non-zero) period must be persisted and used by
+/// `cleanup_expired_payments`.
+/// Closes: <https://github.com/queenannaE/pulsar-contracts/issues/37>
 #[test]
 fn test_set_cleanup_period_valid_is_persisted() {
     let (env, client) = setup();
