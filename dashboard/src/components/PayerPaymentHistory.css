@@ -1,0 +1,177 @@
+/* PayerPaymentHistory styles */
+
+.pph { width: 100%; }
+
+.pph__connect-prompt { color: var(--muted-text); padding: 2rem 0; text-align: center; }
+
+/* ── Filters ──────────────────────────────────────────────── */
+.pph__filters { margin-bottom: 1.25rem; }
+
+.pph__filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.pph__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 110px;
+}
+
+.pph__field label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted-text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pph__field input,
+.pph__field select {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.875rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.pph__field input:focus,
+.pph__field select:focus {
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.pph__apply-btn {
+  padding: 0.4rem 1rem;
+  font-size: 0.875rem;
+}
+
+/* ── Status messages ──────────────────────────────────────── */
+.pph__status { color: var(--muted-text); padding: 0.5rem 0; }
+.pph__error  { color: var(--error); background: var(--error-bg); padding: 0.5rem 0.75rem; border-radius: 4px; margin-bottom: 1rem; }
+.pph__empty  { color: var(--muted-text); text-align: center; padding: 1.5rem; }
+
+/* ── Desktop table ────────────────────────────────────────── */
+.pph__table-wrap { overflow-x: auto; }
+
+.pph__table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.pph__table th,
+.pph__table td {
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--row-border);
+  font-size: 0.9rem;
+}
+
+.pph__table th {
+  background: var(--subtle-bg);
+  font-weight: 600;
+}
+
+.pph__mono { font-family: monospace; font-size: 0.82em; }
+
+/* ── Status badges ────────────────────────────────────────── */
+.pph__badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pph__badge--completed         { background: #d4edda; color: #155724; }
+.pph__badge--partiallyrefunded { background: #fff3cd; color: #856404; }
+.pph__badge--fullyrefunded     { background: #cce5ff; color: #004085; }
+
+:root[data-theme='dark'] .pph__badge--completed         { background: #1a3d27; color: #6fcf97; }
+:root[data-theme='dark'] .pph__badge--partiallyrefunded { background: #3d3010; color: #f2c94c; }
+:root[data-theme='dark'] .pph__badge--fullyrefunded     { background: #0d2a45; color: #56b4e9; }
+
+/* ── Refund status cell ───────────────────────────────────── */
+.pph__refund-btn {
+  padding: 0.2rem 0.6rem;
+  font-size: 0.78rem;
+  border-radius: 3px;
+}
+
+.pph__refund-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.pph__refund-status {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+.pph__refund-status--none      { color: var(--muted-text); }
+.pph__refund-status--pending   { color: #856404; }
+.pph__refund-status--approved  { color: #155724; }
+.pph__refund-status--completed { color: #004085; }
+.pph__refund-status--rejected  { color: var(--error); }
+
+/* ── Pagination ───────────────────────────────────────────── */
+.pph__pagination {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1rem;
+  justify-content: center;
+}
+
+.pph__page-info { font-size: 0.875rem; color: var(--muted-text); }
+
+/* ── Mobile cards (hidden on desktop) ────────────────────── */
+.pph__cards { display: none; list-style: none; padding: 0; margin: 0; }
+
+@media (max-width: 639px) {
+  .pph__table-wrap { display: none; }
+
+  .pph__cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .pph__card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.875rem 1rem;
+  }
+
+  .pph__card dl { display: grid; grid-template-columns: 1fr; gap: 0.45rem; }
+
+  .pph__card-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--row-border);
+    padding-bottom: 0.35rem;
+  }
+
+  .pph__card-row:last-child { border-bottom: none; padding-bottom: 0; }
+
+  .pph__card dt {
+    font-weight: 600;
+    font-size: 0.78rem;
+    color: var(--muted-text);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+
+  .pph__card dd { text-align: right; font-size: 0.875rem; }
+
+  .pph__filter-row { flex-direction: column; }
+  .pph__field { min-width: unset; width: 100%; }
+}
