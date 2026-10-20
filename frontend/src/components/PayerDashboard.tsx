@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useWallet } from "../useWallet";
 import { FilterBar } from "./FilterBar";
 import { PaymentTable } from "./PaymentTable";
+import { ErrorMessage } from "./ContractCallStatus";
 import { fetchPayerHistory } from "../contract";
 import type { PaymentRecord, PaymentFilter } from "../contract";
 
@@ -147,7 +148,7 @@ export function PayerDashboard() {
           <button onClick={connect} style={btnStyle("#6366f1")}>
             Connect Freighter
           </button>
-          {walletError && <p style={{ color: "#ef4444" }}>{walletError}</p>}
+          {walletError && <ErrorMessage message={walletError} />}
         </div>
       ) : (
         <>
@@ -169,7 +170,7 @@ export function PayerDashboard() {
             onSortOrder={updateSortOrder}
           />
 
-          {fetchError && <p style={{ color: "#ef4444" }}>{fetchError}</p>}
+          {fetchError && <ErrorMessage message={fetchError} />}
 
           <PaymentTable records={records} loading={loading} />
 
