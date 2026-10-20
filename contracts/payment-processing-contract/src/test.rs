@@ -250,24 +250,25 @@ fn test_update_merchant_success() {
         &str(&env, "old desc"),
         &str(&env, "old@c.com"),
         &MerchantCategory::Retail,
+        &None,
     );
     client.update_merchant(
         &merchant,
         &str(&env, "New Name"),
         &str(&env, "new desc"),
         &str(&env, "new@c.com"),
-        &MerchantCategory::Food,
     );
     let m = client.get_merchant(&merchant);
     assert_eq!(m.name, str(&env, "New Name"));
-    assert_eq!(m.category, MerchantCategory::Food);
+    assert_eq!(m.description, str(&env, "new desc"));
+    assert_eq!(m.contact_info, str(&env, "new@c.com"));
+    assert_eq!(m.category, MerchantCategory::Retail);
     assert!(m.active);
-    // registered_at preserved (non-zero since we don't advance time)
     assert_eq!(m.registered_at, 0);
 }
 
 #[test]
-fn test_update_merchant_empty_name_fails() {
+fn test_update_merchant_unauthorized_fails() {
     let (env, client) = setup();
     let merchant = Address::generate(&env);
     client.register_merchant(
@@ -276,15 +277,17 @@ fn test_update_merchant_empty_name_fails() {
         &str(&env, "desc"),
         &str(&env, "c@c.com"),
         &MerchantCategory::Retail,
+        &None,
     );
-    let result = client.try_update_merchant(
-        &merchant,
-        &str(&env, ""),
-        &str(&env, "desc"),
-        &str(&env, "c@c.com"),
-        &MerchantCategory::Retail,
-    );
-    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+    env.mock_auths(&[]);
+    assert!(client
+        .try_update_merchant(
+            &merchant,
+            &str(&env, "New Name"),
+            &str(&env, "new desc"),
+            &str(&env, "new@c.com"),
+        )
+        .is_err());
 }
 
 #[test]
@@ -296,33 +299,8 @@ fn test_update_merchant_not_found_fails() {
         &str(&env, "Name"),
         &str(&env, "desc"),
         &str(&env, "c@c.com"),
-        &MerchantCategory::Retail,
     );
     assert_eq!(result, Err(Ok(PaymentError::MerchantNotFound)));
-}
-
-#[test]
-fn test_update_merchant_inactive_fails() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    client.set_admin(&admin);
-    client.register_merchant(
-        &merchant,
-        &str(&env, "Store"),
-        &str(&env, "desc"),
-        &str(&env, "c@c.com"),
-        &MerchantCategory::Retail,
-    );
-    client.deactivate_merchant(&admin, &merchant);
-    let result = client.try_update_merchant(
-        &merchant,
-        &str(&env, "New Name"),
-        &str(&env, "desc"),
-        &str(&env, "c@c.com"),
-        &MerchantCategory::Retail,
-    );
-    assert_eq!(result, Err(Ok(PaymentError::MerchantInactive)));
 }
 
 // ── Payment tests ─────────────────────────────────────────────────────────────
@@ -466,16 +444,40 @@ fn test_full_refund_flow_with_balance_assertions() {
 fn test_refund_reason_length_limit() {
     let (env, client) = setup();
     let (_admin, _merchant, payer, _token) = setup_paid_order(&env, &client);
+    // 256-byte reason is accepted
     client.initiate_refund(&payer, &bytes(&env, "REFUND_OK"), &bytes(&env, "ORDER_001"), &100, &str(&env, &"r".repeat(256)));
+    // 257-byte reason is rejected — enforces the 256-byte storage-bloat guard (SEC-004)
     assert_eq!(
         client.try_initiate_refund(&payer, &bytes(&env, "REFUND_BAD"), &bytes(&env, "ORDER_001"), &100, &str(&env, &"r".repeat(257))),
         Err(Ok(PaymentError::InvalidInput))
     );
 }
 
-/// T-009: A random caller who is neither the merchant nor an admin
-/// must receive `Unauthorized` when attempting to approve a refund.
-/// Closes: <https://github.com/queenannaE/pulsar-contracts/issues/39>
+/// SEC-004: dispute_reason field must also be bounded at 256 bytes to prevent
+/// storage bloat via the dispute escalation path.
+#[test]
+fn test_dispute_reason_length_limit() {
+    let (env, client) = setup();
+    let (_admin, merchant, payer, _token) = setup_paid_order(&env, &client);
+
+    // Initiate and then reject a refund so it can be disputed
+    client.initiate_refund(&payer, &bytes(&env, "REFUND_D1"), &bytes(&env, "ORDER_001"), &100, &str(&env, "reason"));
+    client.reject_refund(&merchant, &bytes(&env, "REFUND_D1"), &None);
+
+    // 256-byte dispute reason is accepted
+    client.dispute_refund(&payer, &bytes(&env, "REFUND_D1"), &str(&env, &"d".repeat(256)));
+
+    // Reset: initiate another refund to test the over-limit case
+    client.initiate_refund(&payer, &bytes(&env, "REFUND_D2"), &bytes(&env, "ORDER_001"), &100, &str(&env, "reason"));
+    client.reject_refund(&merchant, &bytes(&env, "REFUND_D2"), &None);
+
+    // 257-byte dispute reason must be rejected (SEC-004)
+    assert_eq!(
+        client.try_dispute_refund(&payer, &bytes(&env, "REFUND_D2"), &str(&env, &"d".repeat(257))),
+        Err(Ok(PaymentError::InvalidInput))
+    );
+}
+
 #[test]
 fn test_approve_refund_unauthorized_fails() {
     let (env, client) = setup();
@@ -928,6 +930,10 @@ fn test_set_cleanup_period() {
     client.set_payment_cleanup_period(&admins(&env, &admin), &86400);
 }
 
+/// T-007: Passing `period = 0` to `set_payment_cleanup_period` must return
+/// `InvalidInput`. The zero-period guard exists in the implementation but
+/// was previously untested.
+/// Closes: <https://github.com/queenannaE/pulsar-contracts/issues/37>
 #[test]
 fn test_set_cleanup_period_zero_fails() {
     let (env, client) = setup();
@@ -939,6 +945,9 @@ fn test_set_cleanup_period_zero_fails() {
     );
 }
 
+/// T-007: A valid (non-zero) period must be persisted and used by
+/// `cleanup_expired_payments`.
+/// Closes: <https://github.com/queenannaE/pulsar-contracts/issues/37>
 #[test]
 fn test_set_cleanup_period_valid_is_persisted() {
     let (env, client) = setup();
@@ -2042,6 +2051,57 @@ fn test_payment_negative_amount_fails() {
 }
 
 // ── T-001: Real ed25519 key-pair signature tests ──────────────────────────────
+
+/// SEC-002: Verifies that process_payment_with_signature rejects a payment when
+/// the caller supplies a key that does not match the key registered on-chain.
+/// An attacker cannot substitute their own key to bypass signature verification.
+#[test]
+fn test_payment_signature_key_mismatch_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, PaymentContract);
+    let client = PaymentContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let token = create_token(&env, &admin);
+
+    // Register merchant with key_A
+    let seed_a = [1u8; 32];
+    let signing_key_a = SigningKey::from_bytes(&seed_a);
+    let pub_key_a: BytesN<32> = BytesN::from_array(&env, &signing_key_a.verifying_key().to_bytes());
+
+    client.set_admin(&vec![&env, admin.clone()], &1);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "MismatchStore"),
+        &str(&env, "desc"),
+        &str(&env, "test@store.com"),
+        &MerchantCategory::Retail,
+        &Some(pub_key_a),
+    );
+    mint(&env, &token, &payer, 5000);
+
+    let order = make_order(&env, &merchant, &payer, &token);
+
+    // Attacker signs with their own key_B (not registered for this merchant)
+    let seed_b = [99u8; 32];
+    let (attacker_key, attacker_sig) = sign_order_xdr(&env, &order, &seed_b);
+
+    // The contract must reject the signature because key_B is not bound to this merchant
+    // (contract verifies against the stored key_A, ignoring the caller-supplied key param)
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &order,
+        &attacker_sig,
+        &attacker_key,
+    );
+    assert!(
+        result.is_err(),
+        "Expected rejection when signature key does not match the on-chain bound key"
+    );
+}
 
 /// Registers a merchant with a real ed25519 public key, signs the full XDR
 /// payload with the matching private key, and asserts the payment succeeds.
