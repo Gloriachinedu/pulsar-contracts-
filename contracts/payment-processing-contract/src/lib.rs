@@ -254,6 +254,7 @@ impl PaymentContract {
         description: String,
         contact_info: String,
     ) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
         merchant_address.require_auth();
         helper::validate_merchant_fields(&name, &description, &contact_info)?;
         let mut merchant =
