@@ -32,6 +32,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # DO-008: fail fast if the MSRV declared in the contract Cargo.toml
+      # drifts from the MSRV pinned in the matrix above.  This automates the
+      # "kept in sync" acceptance criterion so a maintainer forgetting to
+      # update one side is caught at CI time rather than after a release.
+      - name: Verify MSRV is in sync (Cargo.toml ↔ CI matrix)
+        run: |
+          set -euo pipefail
+          CARGO_MSRV=$(grep -E '^rust-version' contracts/payment-processing-contract/Cargo.toml \
+            | head -1 | sed -E 's/.*"([0-9.]+)".*/\1/')
+          CI_MSRV=$(grep -E '# MSRV' .github/workflows/ci.yml \
+            | head -1 | sed -E 's/.*"([0-9.]+)".*# MSRV.*/\1/')
+          echo "Cargo.toml rust-version: $CARGO_MSRV"
+          echo "CI matrix MSRV:          $CI_MSRV"
+          if [ "$CARGO_MSRV" != "$CI_MSRV" ]; then
+            echo "::error::MSRV mismatch — Cargo.toml has $CARGO_MSRV but the CI matrix has $CI_MSRV. Update both to keep them in sync (see issue DO-008)."
+            exit 1
+          fi
+          echo "MSRV in sync: $CARGO_MSRV"
+
       - name: Install Rust ${{ matrix.toolchain }}
         uses: dtolnay/rust-toolchain@master
         with:

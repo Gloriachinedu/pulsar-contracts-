@@ -171,6 +171,15 @@ tool installation.
 
 **Prerequisites:** Docker Desktop (or Docker Engine + Compose plugin).
 
+> The dev image pins the Rust toolchain to the project MSRV (`1.79`). A
+> `.dockerignore` at the repo root keeps `docker compose build` fast by
+> excluding `target/`, `.git/`, and other local-only artefacts from the build
+> context. To build against a different Rust version, override the build arg:
+>
+> ```bash
+> docker compose build --build-arg RUST_VER=1.80.0
+> ```
+
 ```bash
 # 1. Start the local Stellar network and the dev container
 docker compose up -d
