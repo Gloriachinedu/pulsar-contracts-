@@ -6,6 +6,53 @@ import { fetchPayerHistory } from "../contract";
 import type { PaymentRecord, PaymentFilter } from "../contract";
 
 const PAGE_SIZE = 20;
+const STATUSES = ["Any", "Completed", "PartiallyRefunded", "FullyRefunded"] as const;
+
+type SortField = "Date" | "Amount";
+type SortOrder = "Ascending" | "Descending";
+
+function readDashboardState(search: string) {
+  const params = new URLSearchParams(search);
+  const status = params.get("status");
+  const amountMin = Number(params.get("amount_min"));
+  const amountMax = Number(params.get("amount_max"));
+  const sortField = params.get("sort_field");
+  const sortOrder = params.get("sort_order");
+
+  return {
+    filter: {
+      status: STATUSES.includes(status as (typeof STATUSES)[number])
+        ? (status as PaymentFilter["status"])
+        : "Any",
+      amount_min: params.has("amount_min") && Number.isFinite(amountMin) ? amountMin : undefined,
+      amount_max: params.has("amount_max") && Number.isFinite(amountMax) ? amountMax : undefined,
+    } satisfies PaymentFilter,
+    sortField: sortField === "Amount" ? "Amount" as SortField : "Date" as SortField,
+    sortOrder: sortOrder === "Ascending" ? "Ascending" as SortOrder : "Descending" as SortOrder,
+  };
+}
+
+function writeDashboardState(
+  filter: PaymentFilter,
+  sortField: SortField,
+  sortOrder: SortOrder
+) {
+  const url = new URL(window.location.href);
+  const values: Record<string, string | undefined> = {
+    status: filter.status === "Any" ? undefined : filter.status,
+    amount_min: filter.amount_min?.toString(),
+    amount_max: filter.amount_max?.toString(),
+    sort_field: sortField === "Date" ? undefined : sortField,
+    sort_order: sortOrder === "Descending" ? undefined : sortOrder,
+  };
+
+  Object.entries(values).forEach(([key, value]) => {
+    if (value === undefined || value === "") url.searchParams.delete(key);
+    else url.searchParams.set(key, value);
+  });
+
+  window.history.pushState(null, "", url);
+}
 
 export function PayerDashboard() {
   const { address, error: walletError, connect, disconnect } = useWallet();
@@ -17,9 +64,37 @@ export function PayerDashboard() {
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  const [filter, setFilter] = useState<PaymentFilter>({ status: "Any" });
-  const [sortField, setSortField] = useState<"Date" | "Amount">("Date");
-  const [sortOrder, setSortOrder] = useState<"Ascending" | "Descending">("Descending");
+  const [initialState] = useState(() => readDashboardState(window.location.search));
+  const [filter, setFilter] = useState<PaymentFilter>(initialState.filter);
+  const [sortField, setSortField] = useState<SortField>(initialState.sortField);
+  const [sortOrder, setSortOrder] = useState<SortOrder>(initialState.sortOrder);
+
+  useEffect(() => {
+    const restoreState = () => {
+      const state = readDashboardState(window.location.search);
+      setFilter(state.filter);
+      setSortField(state.sortField);
+      setSortOrder(state.sortOrder);
+    };
+
+    window.addEventListener("popstate", restoreState);
+    return () => window.removeEventListener("popstate", restoreState);
+  }, []);
+
+  const updateFilter = (nextFilter: PaymentFilter) => {
+    setFilter(nextFilter);
+    writeDashboardState(nextFilter, sortField, sortOrder);
+  };
+
+  const updateSortField = (nextSortField: SortField) => {
+    setSortField(nextSortField);
+    writeDashboardState(filter, nextSortField, sortOrder);
+  };
+
+  const updateSortOrder = (nextSortOrder: SortOrder) => {
+    setSortOrder(nextSortOrder);
+    writeDashboardState(filter, sortField, nextSortOrder);
+  };
 
   const load = useCallback(
     async (cursor: string | null) => {
@@ -89,9 +164,9 @@ export function PayerDashboard() {
             filter={filter}
             sortField={sortField}
             sortOrder={sortOrder}
-            onChange={setFilter}
-            onSortField={setSortField}
-            onSortOrder={setSortOrder}
+            onChange={updateFilter}
+            onSortField={updateSortField}
+            onSortOrder={updateSortOrder}
           />
 
           {fetchError && <p style={{ color: "#ef4444" }}>{fetchError}</p>}
