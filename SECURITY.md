@@ -10,9 +10,22 @@
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Please report security vulnerabilities through the GitHub private security advisory system:
+There are two supported reporting channels. The GitHub private security
+advisory system is preferred because it provides a structured, auditable
+workflow; email is available as a fallback for reporters who cannot use it.
 
-👉 **[Report a vulnerability](https://github.com/devEunicee/pulsar-contracts/security/advisories/new)**
+### 1. GitHub private security advisory (preferred)
+
+👉 **[Report a vulnerability](https://github.com/queenannaE/pulsar-contracts/security/advisories/new)**
+
+This opens a private advisory on the `queenannaE/pulsar-contracts`
+repository. Only the repository maintainers can see your report.
+
+### 2. Email the maintainers directly
+
+Send your report to **euniceoyiefieo@gmail.com** with the subject line
+`[SECURITY] Pulsar — <short summary>`. Please encrypt sensitive details
+with the maintainer's PGP key if you have it; otherwise plain email is fine.
 
 ### What to include
 
@@ -30,6 +43,13 @@ Please report security vulnerabilities through the GitHub private security advis
 | Fix or mitigation | Within **90 days** (critical issues prioritised) |
 
 We will keep you informed of progress throughout the process and credit you in the release notes unless you prefer to remain anonymous.
+
+### Coordinated disclosure
+
+We follow a coordinated disclosure model. Reporters are asked to give
+maintainers a reasonable window (default 90 days, or until a fix is shipped —
+whichever comes first) before publicly disclosing the issue. We will not
+take action against good-faith security research that respects this window.
 
 ## Scope
 

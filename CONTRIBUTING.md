@@ -116,7 +116,16 @@ Open a GitHub Issue with:
 
 ## Security Vulnerabilities
 
-Do **not** open a public issue for security vulnerabilities. Email the maintainers directly or use GitHub's private security advisory feature.
+Do **not** open a public issue for security vulnerabilities. Use one of the
+following private channels:
+
+- **GitHub private security advisory (preferred):**
+  https://github.com/queenannaE/pulsar-contracts/security/advisories/new
+- **Email the maintainers:** euniceoyiefieo@gmail.com
+  (subject line `[SECURITY] Pulsar — <short summary>`)
+
+See [SECURITY.md](SECURITY.md) for the full disclosure policy, response SLA,
+and the list of information to include in your report.
 
 ## License
 
