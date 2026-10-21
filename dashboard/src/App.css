@@ -53,9 +53,14 @@
 
 body { font-family: system-ui, sans-serif; background: var(--page-bg); color: var(--text); }
 
-.app { max-width: 960px; margin: 0 auto; padding: 1rem; }
+/* ---- App layout ---- */
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
 
-/* Header */
+/* ---- Header ---- */
 .app-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 1rem 0; border-bottom: 2px solid var(--border); margin-bottom: 1.5rem;
