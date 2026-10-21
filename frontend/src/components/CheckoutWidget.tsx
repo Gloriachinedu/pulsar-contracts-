@@ -3,18 +3,38 @@ import { useContractCall } from "../hooks/useContractCall";
 import { Spinner, ErrorMessage, SuccessBanner } from "./ContractCallStatus";
 
 export interface CheckoutWidgetProps {
+  /** Merchant-assigned order identifier. */
   orderId: string;
+  /** Payment amount in the smallest token unit. */
   amount: number;
+  /** Token contract address (Stellar asset). */
   token: string;
+  /** Merchant's Stellar public key. */
   merchantAddress: string;
+  /** Called with the transaction hash on successful submission. */
   onSuccess?: (txHash: string) => void;
+  /** Called with a human-readable error message on failure. */
   onError?: (message: string) => void;
 }
 
 /**
  * Embeddable checkout widget.
- * Handles wallet connection, signing, and contract submission.
- * Emits onSuccess / onError callbacks.
+ *
+ * Drop-in React component that handles Freighter wallet connection, order
+ * signing, and contract submission. Accepts orderId, amount, token, and
+ * merchantAddress props, and emits onSuccess / onError callbacks.
+ *
+ * Usage:
+ * ```tsx
+ * <CheckoutWidget
+ *   orderId="order_123"
+ *   amount={1000}
+ *   token="USDC_CONTRACT_ADDRESS"
+ *   merchantAddress="GMERCHANT..."
+ *   onSuccess={(tx) => console.log("paid", tx)}
+ *   onError={(msg) => console.error(msg)}
+ * />
+ * ```
  */
 export function CheckoutWidget({
   orderId,
@@ -28,7 +48,6 @@ export function CheckoutWidget({
   const { state, execute, reset } = useContractCall<null>();
 
   async function connectWallet() {
-    // Freighter wallet integration
     const freighter = (window as any).freighter;
     if (!freighter) {
       alert("Freighter wallet extension not found. Please install it.");
@@ -41,6 +60,7 @@ export function CheckoutWidget({
 
   async function handlePay() {
     if (!walletAddress) return;
+
     await execute(async () => {
       const freighter = (window as any).freighter;
 
@@ -55,23 +75,38 @@ export function CheckoutWidget({
         expires_at: Math.floor(Date.now() / 1000) + 3600,
       };
 
-      // Sign the order with the merchant key via Freighter
+      // Sign the order with Freighter
       const orderJson = JSON.stringify(order);
       const { signedXDR } = await freighter.signTransaction(orderJson, {
         network: "TESTNET",
       });
 
-      // Submit to contract (replace with your SDK call)
+      // Submit to contract (replace with actual @stellar/stellar-sdk call)
       const txHash = await submitPayment({ order, signature: signedXDR });
 
+      // Fire success callback inside the executor so the txHash is available
+      // immediately and before React re-renders with the success state.
       onSuccess?.(txHash);
       return { result: null, txHash };
     });
-
-    if (state.status === "error") {
-      onError?.((state as any).message);
-    }
+    // Note: onError is wired via useEffect below so it fires after React
+    // has actually committed the error state — avoiding a stale-closure bug
+    // where state.status is checked synchronously before the state update.
   }
+
+  // Fire onError callback after the state update has been committed.
+  // Using a ref-flag avoids calling the callback on the initial render.
+  const prevStatusRef = React.useRef(state.status);
+  React.useEffect(() => {
+    if (
+      prevStatusRef.current !== "error" &&
+      state.status === "error" &&
+      onError
+    ) {
+      onError((state as Extract<typeof state, { status: "error" }>).message);
+    }
+    prevStatusRef.current = state.status;
+  }, [state, onError]);
 
   return (
     <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 max-w-sm w-full shadow-sm space-y-4">
@@ -131,6 +166,9 @@ export function CheckoutWidget({
 }
 
 /** Stub — replace with actual @stellar/stellar-sdk contract invocation. */
-async function submitPayment(_payload: { order: object; signature: string }): Promise<string> {
+async function submitPayment(_payload: {
+  order: object;
+  signature: string;
+}): Promise<string> {
   throw new Error("submitPayment: not yet wired to contract SDK.");
 }
