@@ -1,4 +1,5 @@
 import React from "react";
+import { Spinner } from "./ContractCallStatus";
 import type { PaymentRecord } from "../contract";
 
 interface Props {
@@ -13,7 +14,13 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 export function PaymentTable({ records, loading }: Props) {
-  if (loading) return <p>Loading…</p>;
+  if (loading) {
+    return (
+      <div style={{ padding: "24px 0", display: "flex", justifyContent: "center" }}>
+        <Spinner label="Loading payments…" />
+      </div>
+    );
+  }
   if (!records.length) return <p>No payments found.</p>;
 
   return (

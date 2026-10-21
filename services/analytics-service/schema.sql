@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS payments (
   id SERIAL PRIMARY KEY,
   merchant_id TEXT NOT NULL,
   customer_id TEXT,
+  token TEXT NOT NULL DEFAULT 'native',
   amount NUMERIC NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -15,6 +16,7 @@ CREATE TABLE IF NOT EXISTS refunds (
 );
 
 CREATE INDEX IF NOT EXISTS idx_payments_merchant_id ON payments(merchant_id);
+CREATE INDEX IF NOT EXISTS idx_payments_token ON payments(token);
 CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);
 CREATE INDEX IF NOT EXISTS idx_refunds_merchant_id ON refunds(merchant_id);
 CREATE INDEX IF NOT EXISTS idx_refunds_created_at ON refunds(created_at);
