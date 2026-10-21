@@ -1510,6 +1510,10 @@ fn test_get_multisig_payment_access_control_and_state() {
     assert!(ms_after.signatures.contains(&signer1));
 }
 
+/// T-008: A duplicate address in `required_signers` must be rejected with
+/// `InvalidInput`. The deduplication loop in `initiate_multisig_payment`
+/// prevents a single signer from satisfying the full threshold alone.
+/// Closes: <https://github.com/queenannaE/pulsar-contracts/issues/38>
 #[test]
 fn test_initiate_multisig_duplicate_signer_fails() {
     let (env, client) = setup();
