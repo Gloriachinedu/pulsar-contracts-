@@ -32,6 +32,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # DO-008: fail fast if the MSRV declared in the contract Cargo.toml
+      # drifts from the MSRV pinned in the matrix above.  This automates the
+      # "kept in sync" acceptance criterion so a maintainer forgetting to
+      # update one side is caught at CI time rather than after a release.
+      - name: Verify MSRV is in sync (Cargo.toml ↔ CI matrix)
+        run: |
+          set -euo pipefail
+          CARGO_MSRV=$(grep -E '^rust-version' contracts/payment-processing-contract/Cargo.toml \
+            | head -1 | sed -E 's/.*"([0-9.]+)".*/\1/')
+          CI_MSRV=$(grep -E '# MSRV' .github/workflows/ci.yml \
+            | head -1 | sed -E 's/.*"([0-9.]+)".*# MSRV.*/\1/')
+          echo "Cargo.toml rust-version: $CARGO_MSRV"
+          echo "CI matrix MSRV:          $CI_MSRV"
+          if [ "$CARGO_MSRV" != "$CI_MSRV" ]; then
+            echo "::error::MSRV mismatch — Cargo.toml has $CARGO_MSRV but the CI matrix has $CI_MSRV. Update both to keep them in sync (see issue DO-008)."
+            exit 1
+          fi
+          echo "MSRV in sync: $CARGO_MSRV"
+
       - name: Install Rust ${{ matrix.toolchain }}
         uses: dtolnay/rust-toolchain@master
         with:
@@ -131,6 +150,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write  # required to upload files to GitHub Releases
     steps:
       - uses: actions/checkout@v4
 
@@ -235,13 +256,20 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Restore cargo-audit cache
+      - name: Restore cargo-audit binary cache
         id: cargo_audit_cache
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-audit
           key: ${{ runner.os }}-cargo-audit-0.21.2
           restore-keys: ${{ runner.os }}-cargo-audit-
+
+      - name: Restore advisory-db cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/advisory-db
+          key: ${{ runner.os }}-advisory-db-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-advisory-db-
 
       - name: Install cargo-audit
         if: steps.cargo_audit_cache.outputs.cache-hit != 'true'
