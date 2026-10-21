@@ -68,6 +68,25 @@ pub struct PaymentRecord {
     pub description: String,
 }
 
+/// On-chain data source for a payer/merchant-facing payment receipt
+/// (see docs/RECEIPT_FORMAT.md). This struct only carries fields the
+/// contract itself can attest to; the Stellar transaction hash and any
+/// PDF rendering are produced off-chain (e.g. by an indexer/API layer)
+/// since a contract cannot observe the hash of the transaction that
+/// invoked it.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentReceipt {
+    pub order_id: Bytes,
+    pub amount: i128,
+    pub token: Address,
+    pub merchant_address: Address,
+    pub merchant_name: String,
+    pub payer: Address,
+    pub status: PaymentStatus,
+    pub paid_at: u64,
+}
+
 // ── Refund ────────────────────────────────────────────────────────────────────
 
 #[contracttype]

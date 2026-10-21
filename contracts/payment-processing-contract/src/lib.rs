@@ -34,8 +34,8 @@ use error::PaymentError;
 use storage::{REFUND_GRACE_BUFFER, REFUND_WINDOW};
 use types::{
     DataKey, GlobalStats, Merchant, MerchantCategory, MerchantStats, MultisigPayment,
-    PaymentFilter, PaymentOrder, PaymentPage, PaymentRecord, PaymentStatus, RefundRecord,
-    RefundStatus, SortField, SortOrder,
+    PaymentFilter, PaymentOrder, PaymentPage, PaymentReceipt, PaymentRecord, PaymentStatus,
+    RefundRecord, RefundStatus, SortField, SortOrder,
 };
 
 #[contract]
@@ -723,6 +723,43 @@ impl PaymentContract {
             return Err(PaymentError::Unauthorized);
         }
         Ok(record)
+    }
+
+    /// Return the on-chain data needed to render a payment receipt
+    /// (see docs/RECEIPT_FORMAT.md for the full field list and the format
+    /// an off-chain service should use to turn this into a PDF).
+    ///
+    /// Access control mirrors [`Self::get_payment_by_id`]: only the payer,
+    /// the merchant, or an admin may request a receipt for a payment.
+    ///
+    /// # Parameters
+    /// - `caller` — The address requesting the receipt; must be authenticated.
+    /// - `order_id` — The unique order identifier.
+    ///
+    /// # Errors
+    /// - [`PaymentError::PaymentNotFound`] if no payment exists for `order_id`.
+    /// - [`PaymentError::MerchantNotFound`] if the merchant record referenced
+    ///   by the payment is missing (should not happen in practice).
+    /// - [`PaymentError::Unauthorized`] if `caller` is not the payer, merchant,
+    ///   or an admin.
+    pub fn get_payment_receipt(
+        env: Env,
+        caller: Address,
+        order_id: Bytes,
+    ) -> Result<PaymentReceipt, PaymentError> {
+        let record = Self::get_payment_by_id(env.clone(), caller, order_id)?;
+        let merchant = storage::get_merchant(&env, &record.merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+        Ok(PaymentReceipt {
+            order_id: record.order_id,
+            amount: record.amount,
+            token: record.token,
+            merchant_address: record.merchant_address,
+            merchant_name: merchant.name,
+            payer: record.payer,
+            status: record.status,
+            paid_at: record.paid_at,
+        })
     }
 
     /// Return a paginated, filtered, and sorted list of payments for a merchant.
