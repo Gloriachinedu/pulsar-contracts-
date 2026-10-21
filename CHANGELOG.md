@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+> See [docs/VERSIONING.md](docs/VERSIONING.md) for the full versioning policy and release process.
+
 ## Versioning Policy
 
 Versions follow **MAJOR.MINOR.PATCH** semantics:
@@ -36,10 +38,11 @@ Versions follow **MAJOR.MINOR.PATCH** semantics:
 - `README.md`: added SDK & Integrator Resources table linking to the SDK, API reference, ABI, and idempotency guide.
 
 ### Changed
-- Remove unused `StorageError` variant from the payment contract ABI.
+- Remove unused `StorageError` (code 51) variant from the payment contract ABI and SDK (`error.rs`, `sdk/errors.ts`, `sdk/error-registry.json`). The variant was never returned by any code path; removing it reduces ABI noise for integrators. Closes #9.
 - Harden payment and refund flows against external token transfer re-entrancy by committing state before external calls.
 - Add best-effort zero/burn admin address validation and test coverage for invalid admin assignment.
 - Add date-filter coverage for `get_global_payment_stats` to cover all-payments and no-payments ranges.
+- Add `InsufficientBalance` (code 25) to `PaymentError` enum and pre-check payer/merchant token balances before transfers in `process_payment_with_signature` and `execute_refund`, returning a typed error instead of a host trap. Closes #10.
 
 ---
 
