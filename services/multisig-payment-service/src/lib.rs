@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /// Off-chain multisig payment service with on-chain quorum validation.
 ///
 /// # Problem

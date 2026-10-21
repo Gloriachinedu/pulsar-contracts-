@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /// Data export service — streaming CSV / JSON export.
 ///
 /// # Architecture
