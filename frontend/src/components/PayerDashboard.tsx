@@ -163,7 +163,7 @@ export function PayerDashboard() {
           >
             {walletStatus === "connecting" ? "Connecting…" : "Connect Freighter"}
           </button>
-          {walletError && <p style={{ color: "#ef4444" }}>{walletError}</p>}
+          {walletError && <ErrorMessage message={walletError} />}
         </div>
       ) : (
         <>
@@ -185,7 +185,7 @@ export function PayerDashboard() {
             onSortOrder={updateSortOrder}
           />
 
-          {fetchError && <p style={{ color: "#ef4444" }}>{fetchError}</p>}
+          {fetchError && <ErrorMessage message={fetchError} />}
 
           <PaymentTable records={records} loading={loading} />
 
