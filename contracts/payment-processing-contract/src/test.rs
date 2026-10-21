@@ -1465,7 +1465,7 @@ fn test_get_global_payment_stats() {
 #[test]
 fn test_resolve_dispute_within_window_passes() {
     let (env, client) = setup();
-    let (admin, _merchant, payer, _token) = setup_paid_order(&env, &client);
+    let (admin, merchant, payer, _token) = setup_paid_order(&env, &client);
 
     client.initiate_refund(
         &payer,
@@ -1474,25 +1474,29 @@ fn test_resolve_dispute_within_window_passes() {
         &500,
         &str(&env, "disputed"),
     );
-    client.dispute_refund(&payer, &bytes(&env, "REFUND_D1"));
+    // dispute_refund requires the refund to already be Rejected by the merchant
+    // (see PaymentContract::dispute_refund, lib.rs), so reject it first.
+    client.reject_refund(&merchant, &bytes(&env, "REFUND_D1"), &None);
+    client.dispute_refund(&payer, &bytes(&env, "REFUND_D1"), &str(&env, "escalating"));
     assert_eq!(
         client.get_refund_status(&bytes(&env, "REFUND_D1")),
         RefundStatus::Disputed
     );
 
-    // resolve within dispute window (paid_at=0, deadline = 0 + 2_592_000 + 604_800)
     env.ledger().with_mut(|l| l.timestamp = 100);
-    client.resolve_dispute(&admin, &bytes(&env, "REFUND_D1"), &true);
+    // resolve_dispute takes the multisig admin list (helper::require_multi_admin),
+    // not a single Address.
+    client.resolve_dispute(&admins(&env, &admin), &bytes(&env, "REFUND_D1"), &true);
     assert_eq!(
         client.get_refund_status(&bytes(&env, "REFUND_D1")),
-        RefundStatus::Approved
+        RefundStatus::Completed
     );
 }
 
 #[test]
-fn test_resolve_dispute_after_deadline_fails() {
+fn test_resolve_dispute_not_disputed_fails() {
     let (env, client) = setup();
-    let (admin, _merchant, payer, _token) = setup_paid_order(&env, &client);
+    let (admin, merchant, payer, _token) = setup_paid_order(&env, &client);
 
     client.initiate_refund(
         &payer,
@@ -1501,13 +1505,33 @@ fn test_resolve_dispute_after_deadline_fails() {
         &500,
         &str(&env, "disputed"),
     );
-    client.dispute_refund(&payer, &bytes(&env, "REFUND_D2"));
+    client.reject_refund(&merchant, &bytes(&env, "REFUND_D2"), &None);
 
-    // advance past paid_at(0) + REFUND_WINDOW(2_592_000) + DISPUTE_WINDOW(604_800)
-    env.ledger().with_mut(|l| l.timestamp = 2_592_000 + 604_801);
+    // Resolving before the refund has actually been disputed must fail with
+    // RefundNotDisputed (lib.rs: resolve_dispute checks status == Disputed).
+    let result = client.try_resolve_dispute(&admins(&env, &admin), &bytes(&env, "REFUND_D2"), &true);
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotDisputed)));
+}
 
-    let result = client.try_resolve_dispute(&admin, &bytes(&env, "REFUND_D2"), &true);
-    assert_eq!(result, Err(Ok(PaymentError::RefundWindowExpired)));
+#[test]
+fn test_dispute_refund_unauthorized_fails() {
+    let (env, client) = setup();
+    let (_admin, merchant, payer, _token) = setup_paid_order(&env, &client);
+    let stranger = Address::generate(&env);
+
+    client.initiate_refund(
+        &payer,
+        &bytes(&env, "REFUND_D3"),
+        &bytes(&env, "ORDER_001"),
+        &500,
+        &str(&env, "disputed"),
+    );
+    client.reject_refund(&merchant, &bytes(&env, "REFUND_D3"), &None);
+
+    // Only the original payer may dispute a rejection (lib.rs: dispute_refund
+    // checks caller != refund.initiated_by -> DisputeUnauthorized).
+    let result = client.try_dispute_refund(&stranger, &bytes(&env, "REFUND_D3"), &str(&env, "not mine"));
+    assert_eq!(result, Err(Ok(PaymentError::DisputeUnauthorized)));
 }
 
 // ── Multisig tests ────────────────────────────────────────────────────────────
