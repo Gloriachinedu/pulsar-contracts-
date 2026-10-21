@@ -1,15 +1,12 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useWallet } from './hooks/useWallet';
 import PaymentHistory from './components/PaymentHistory';
 import RefundManager from './components/RefundManager';
 import MerchantProfile from './components/MerchantProfile';
+import AdminPanel from './components/AdminPanel';
 import './App.css';
 
-const TABS = [
-  { id: 'Payments', label: 'Payments' },
-  { id: 'Refunds',  label: 'Refunds' },
-  { id: 'Profile',  label: 'Profile' },
-];
+const TABS = ['Payments', 'Refunds', 'Profile', 'Admin'];
 
 export default function App() {
   const {
@@ -22,6 +19,16 @@ export default function App() {
   } = useWallet();
 
   const [tab, setTab] = useState('Payments');
+  const [theme, setTheme] = useState(() => {
+    const savedTheme = window.localStorage.getItem('pulsar-theme');
+    if (savedTheme === 'light' || savedTheme === 'dark') return savedTheme;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem('pulsar-theme', theme);
+  }, [theme]);
 
   return (
     <div className="app">
@@ -30,7 +37,13 @@ export default function App() {
 
       <header className="app-header">
         <h1>Pulsar Merchant Dashboard</h1>
-
+        <button
+          type="button"
+          aria-pressed={theme === 'dark'}
+          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+        >
+          {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+        </button>
         {publicKey ? (
           <div className="wallet-info">
             <span
@@ -96,27 +109,13 @@ export default function App() {
             </ul>
           </nav>
 
-          <main id="main-content">
-            {TABS.map(t => (
-              <div
-                key={t.id}
-                id={`panel-${t.id}`}
-                role="tabpanel"
-                aria-labelledby={`tab-${t.id}`}
-                hidden={tab !== t.id}
-                className="tab-content"
-              >
-                {tab === t.id && (
-                  <>
-                    {t.id === 'Payments' && <PaymentHistory merchantAddress={publicKey} />}
-                    {t.id === 'Refunds'  && <RefundManager  merchantAddress={publicKey} />}
-                    {t.id === 'Profile'  && <MerchantProfile publicKey={publicKey} walletType={walletType} />}
-                  </>
-                )}
-              </div>
-            ))}
-          </main>
-        </>
+          <div role="tabpanel" aria-label={tab} className="tab-content">
+            {tab === 'Payments' && <PaymentHistory merchantAddress={publicKey} />}
+            {tab === 'Refunds'  && <RefundManager  merchantAddress={publicKey} />}
+            {tab === 'Profile'  && <MerchantProfile publicKey={publicKey} />}
+            {tab === 'Admin'    && <AdminPanel      adminAddress={publicKey} />}
+          </div>
+        </main>
       )}
     </div>
   );
