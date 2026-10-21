@@ -23,6 +23,7 @@ const MESSAGES = {
   InvalidAmount:              "Amount must be greater than zero",
   InvalidSignature:           "Signature verification failed",
   PaymentExpired:             "Order is past its expiry timestamp",
+  InsufficientBalance:        "Payer or merchant does not have enough token balance to complete the transfer",
   RefundNotFound:             "Refund ID not found",
   RefundAlreadyExists:        "A refund with this ID already exists",
   RefundWindowExpired:        "The 30-day refund window has passed",
@@ -34,7 +35,7 @@ const MESSAGES = {
   MultisigAlreadyExecuted:    "Multisig payment has already been executed",
   InsufficientSignatures:     "Not all required signers have signed",
   InvalidInput:               "General input validation failure",
-  StorageError:               "Storage operation failed",
+  // StorageError (51) removed — variant was never returned (SC-009).
   ArithmeticError:            "Arithmetic overflow or underflow",
 };
 

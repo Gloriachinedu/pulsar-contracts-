@@ -98,6 +98,11 @@ export function GlobalSearchBar({
       const navigableCount =
         items.length > 0 ? items.length : historyItems.length;
 
+      if (navigableCount === 0 && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+        e.preventDefault();
+        return;
+      }
+
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
@@ -143,6 +148,22 @@ export function GlobalSearchBar({
     results &&
     GROUPS.some((g) => results[g].length > 0);
 
+  const activeResult = flatResults[activeIndex];
+  const activeHistory = showHistory ? history[activeIndex] : undefined;
+  const selectedAnnouncement = showHistory && activeHistory
+    ? `${activeHistory}, item ${activeIndex + 1} of ${history.length} selected.`
+    : activeResult
+      ? `${activeResult.title}, ${activeResult.type}, item ${activeIndex + 1} of ${flatResults.length} selected.`
+      : "";
+  const searchAnnouncement = loading
+    ? "Searching."
+    : showHistory
+      ? `${history.length} recent searches available. ${selectedAnnouncement}`
+      : query.trim() && results
+        ? `${flatResults.length} ${flatResults.length === 1 ? "result" : "results"} available. ${selectedAnnouncement}`
+        : "";
+  const optionId = (index: number) => `${listboxId}-option-${index}`;
+
   return (
     <div
       ref={containerRef}
@@ -182,8 +203,9 @@ export function GlobalSearchBar({
           aria-controls={listboxId}
           aria-autocomplete="list"
           aria-activedescendant={
-            activeIndex >= 0 ? `gsb-option-${activeIndex}` : undefined
+            activeIndex >= 0 ? optionId(activeIndex) : undefined
           }
+          aria-label="Search merchants, payments, and customers"
           autoComplete="off"
           spellCheck={false}
           className="gsb__input"
@@ -219,6 +241,10 @@ export function GlobalSearchBar({
         )}
       </div>
 
+      <span className="gsb__sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {searchAnnouncement}
+      </span>
+
       {/* Dropdown */}
       {showDropdown && (
         <ul
@@ -243,7 +269,7 @@ export function GlobalSearchBar({
               {history.map((h, i) => (
                 <li
                   key={h}
-                  id={`gsb-option-${i}`}
+                  id={optionId(i)}
                   role="option"
                   aria-selected={activeIndex === i}
                   className={`gsb__option gsb__option--history${activeIndex === i ? " gsb__option--active" : ""}`}
@@ -279,7 +305,7 @@ export function GlobalSearchBar({
                     return (
                       <li
                         key={item.id}
-                        id={`gsb-option-${idx}`}
+                        id={optionId(idx)}
                         role="option"
                         aria-selected={activeIndex === idx}
                         className={`gsb__option${activeIndex === idx ? " gsb__option--active" : ""}`}
