@@ -14,6 +14,8 @@ pub enum PaymentError {
     MerchantNotFound = 10,
     MerchantAlreadyRegistered = 11,
     MerchantInactive = 12,
+    /// Attempted to reactivate a merchant that is already active.
+    MerchantAlreadyActive = 13,
 
     // Payment
     PaymentNotFound = 20,
@@ -59,8 +61,9 @@ pub enum PaymentError {
     /// before invoking `process_subscription_payment` again.
     SubscriptionIntervalNotElapsed = 63,
 
-    // Emergency stop (SEC-010)
-    /// The contract is paused. All state-mutating operations are blocked until
-    /// the admin calls `unpause`. Read-only queries remain accessible.
-    ContractPaused = 70,
+    // Token allowlist (SEC-009)
+    /// The token contract address is not on the admin-managed allowlist.
+    /// Enable the allowlist with `set_token_allowlist_mode` and add approved
+    /// tokens with `add_allowed_token` before processing payments.
+    TokenNotAllowed = 71,
 }
