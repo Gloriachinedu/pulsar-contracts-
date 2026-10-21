@@ -849,6 +849,8 @@ Soroban persistent storage entries expire after a ledger TTL. Without active ren
 | Merchant subscription index | `DataKey::MerchantSubscriptions(address)` |
 | Merchant stats | `DataKey::MerchantStats(address)` |
 
+**See also**: [SUBSCRIPTION_GUIDE.md](docs/SUBSCRIPTION_GUIDE.md) for the recurring-payment lifecycle and the off-chain scheduling requirement.
+
 **Instance storage** (admin config, global stats, cleanup period, multisig expiry) uses a separate TTL managed via `storage::bump_instance_ttl()`, which is called at the start of every public contract invocation. A public `bump_instance_ttl(env)` function is also available so anyone can keep the contract alive during periods of low activity.
 
 ---
