@@ -6,6 +6,31 @@ on:
       - main
 
 jobs:
+  # SEC-001: Block the release if no completed audit report has been published
+  # in this repository. The report must exist as a file matching the pattern
+  # docs/audit-report-*.{pdf,md} before a release tag can be created.
+  # To bypass during development/pre-mainnet, remove this job or add a
+  # docs/audit-report-*.md placeholder — but never deploy to mainnet without
+  # a real external audit report.
+  audit-gate:
+    name: Security Audit Gate (SEC-001)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify audit report exists
+        run: |
+          REPORTS=$(find docs -maxdepth 1 -name "audit-report-*" \( -name "*.pdf" -o -name "*.md" \) 2>/dev/null | grep -v "^$" | head -5)
+          if [ -z "$REPORTS" ]; then
+            echo "::error::SEC-001 deployment gate: No audit report found under docs/."
+            echo "::error::A completed security audit report (docs/audit-report-<version>-<auditor>.pdf or .md)"
+            echo "::error::must be committed to this repository before a release can be created."
+            echo "::error::See docs/security-audit.md for the full audit process and requirements."
+            exit 1
+          fi
+          echo "Audit report(s) found:"
+          echo "$REPORTS"
+
   check-version:
     name: Detect version bump
     runs-on: ubuntu-latest
@@ -36,7 +61,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: check-version
+    needs: [audit-gate, check-version]
     if: needs.check-version.outputs.tag_exists == 'false'
     runs-on: ubuntu-latest
     permissions:

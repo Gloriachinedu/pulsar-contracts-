@@ -132,6 +132,18 @@ Before engaging an auditor, ensure the following are complete:
 
 ---
 
+## CI Deployment Gate (SEC-001)
+
+A `check-audit-gate` job in CI enforces that a completed audit report exists
+before any release tag is created. The job looks for the sentinel file
+`docs/audit-report-<version>-<auditor>.pdf` (or a `.md` equivalent) in the
+repository. If the file is absent the release workflow fails with a clear error.
+
+The gate is implemented in `.github/workflows/release.yml` under the
+`audit-gate` job.
+
+---
+
 ## Audit History
 
 | Version | Auditor | Date | Report | Status |
