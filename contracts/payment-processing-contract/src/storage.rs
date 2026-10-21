@@ -113,16 +113,22 @@ pub fn remove_payment(env: &Env, order_id: &Bytes) {
 // ── Archived payments (tombstones) ──────────────────────────────────────────
 
 pub fn is_archived_payment(env: &Env, order_id: &Bytes) -> bool {
-    env.storage()
-        .persistent()
-        .get(&DataKey::ArchivedPayment(order_id.clone()))
-        .unwrap_or(false)
+    let key = DataKey::ArchivedPayment(order_id.clone());
+    let result: bool = env.storage().persistent().get(&key).unwrap_or(false);
+    if result {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_LEDGERS);
+    }
+    result
 }
 
 pub fn set_archived_payment(env: &Env, order_id: &Bytes) {
+    let key = DataKey::ArchivedPayment(order_id.clone());
+    env.storage().persistent().set(&key, &true);
     env.storage()
         .persistent()
-        .set(&DataKey::ArchivedPayment(order_id.clone()), &true);
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_LEDGERS);
 }
 
 // ── Payment index lists ───────────────────────────────────────────────────────
@@ -140,10 +146,19 @@ pub fn get_merchant_payment_ids(env: &Env, merchant: &Address) -> Vec<Bytes> {
 
 pub fn push_merchant_payment_id(env: &Env, merchant: &Address, order_id: &Bytes) {
     let mut ids = get_merchant_payment_ids(env, merchant);
-    // SC-013: cap the in-contract index to prevent unbounded ledger entry growth.
-    // When the cap is reached, the oldest entry is evicted from the index.
-    // The underlying payment record stays in persistent storage and remains
-    // queryable by order ID; only the paginated history index is capped.
+    // SC-013: cap the in-contract merchant payment-ID index to prevent
+    // unbounded ledger entry growth. Loading and re-saving the entire Vec on
+    // every payment is O(n) in storage reads/writes; without a cap the entry
+    // would eventually exceed Soroban's per-entry size limit and make payments
+    // infeasible for active merchants.
+    //
+    // When the cap is reached, the oldest entry is evicted (FIFO). The
+    // underlying PaymentRecord stored under DataKey::Payment(order_id) is NOT
+    // deleted; it remains in persistent storage and is still queryable via
+    // get_payment_by_id. Only the paginated history index is capped.
+    //
+    // See ADR-0006 (docs/adr/0006-payment-id-index-cap.md) for the full
+    // trade-off analysis and the long-term chunked-index roadmap.
     if ids.len() >= MAX_PAYMENT_IDS_PER_KEY {
         let mut trimmed = Vec::new(env);
         for i in 1..ids.len() {
@@ -172,7 +187,8 @@ pub fn get_payer_payment_ids(env: &Env, payer: &Address) -> Vec<Bytes> {
 
 pub fn push_payer_payment_id(env: &Env, payer: &Address, order_id: &Bytes) {
     let mut ids = get_payer_payment_ids(env, payer);
-    // SC-013: same cap as merchant index.
+    // SC-013: same FIFO cap as the merchant index. See push_merchant_payment_id
+    // and ADR-0006 for the full rationale.
     if ids.len() >= MAX_PAYMENT_IDS_PER_KEY {
         let mut trimmed = Vec::new(env);
         for i in 1..ids.len() {
@@ -299,10 +315,14 @@ pub fn push_all_refund_id(env: &Env, refund_id: &Bytes) {
 // ── Per-order pending refund count ────────────────────────────────────────────
 
 pub fn get_order_refund_count(env: &Env, order_id: &Bytes) -> u32 {
-    env.storage()
-        .persistent()
-        .get(&DataKey::OrderRefundCount(order_id.clone()))
-        .unwrap_or(0)
+    let key = DataKey::OrderRefundCount(order_id.clone());
+    let result: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+    if result > 0 {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_LEDGERS);
+    }
+    result
 }
 
 pub fn increment_order_refund_count(env: &Env, order_id: &Bytes) {
@@ -360,16 +380,22 @@ pub fn set_whitelist_enabled(env: &Env, enabled: bool) {
 }
 
 pub fn is_whitelisted(env: &Env, address: &Address) -> bool {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Whitelist(address.clone()))
-        .unwrap_or(false)
+    let key = DataKey::Whitelist(address.clone());
+    let result: bool = env.storage().persistent().get(&key).unwrap_or(false);
+    if result {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_LEDGERS);
+    }
+    result
 }
 
 pub fn set_whitelisted(env: &Env, address: &Address, approved: bool) {
+    let key = DataKey::Whitelist(address.clone());
+    env.storage().persistent().set(&key, &approved);
     env.storage()
         .persistent()
-        .set(&DataKey::Whitelist(address.clone()), &approved);
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_LEDGERS);
 }
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -429,10 +455,13 @@ pub const MAX_SIGNERS: u32 = 10;
 /// Maximum number of pending refunds per order
 pub const MAX_PENDING_REFUNDS: u32 = 10;
 /// Maximum number of payment IDs tracked per merchant or payer in the
-/// in-contract index (SC-013). Older IDs are dropped from the index once the
-/// cap is reached; the full payment records remain in persistent storage and
-/// are still queryable by order ID. Off-chain indexers should be used for
-/// complete history beyond this cap.
+/// in-contract index (SC-013). Older IDs are evicted (FIFO) from the index
+/// once the cap is reached; the full `PaymentRecord` objects remain in
+/// persistent storage and are still queryable by `order_id`. Off-chain
+/// indexers should be used for complete history beyond this cap.
+///
+/// See `docs/adr/0006-payment-id-index-cap.md` for the trade-off analysis,
+/// benchmark estimates, and the long-term chunked-index roadmap.
 pub const MAX_PAYMENT_IDS_PER_KEY: u32 = 10_000;
 
 pub fn get_cleanup_period(env: &Env) -> u64 {
@@ -599,16 +628,20 @@ pub fn push_merchant_subscription_id(env: &Env, merchant: &Address, subscription
 // ── Merchant stats ────────────────────────────────────────────────────────────
 
 pub fn get_merchant_stats(env: &Env, merchant: &Address) -> MerchantStats {
-    env.storage()
-        .persistent()
-        .get(&DataKey::MerchantStats(merchant.clone()))
-        .unwrap_or(MerchantStats {
-            merchant_address: merchant.clone(),
-            total_payments: 0,
-            total_volume: 0,
-            total_refunds: 0,
-            total_refund_volume: 0,
-        })
+    let key = DataKey::MerchantStats(merchant.clone());
+    let result: Option<MerchantStats> = env.storage().persistent().get(&key);
+    if result.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_LEDGERS);
+    }
+    result.unwrap_or(MerchantStats {
+        merchant_address: merchant.clone(),
+        total_payments: 0,
+        total_volume: 0,
+        total_refunds: 0,
+        total_refund_volume: 0,
+    })
 }
 
 pub fn save_merchant_stats(env: &Env, stats: &MerchantStats) {

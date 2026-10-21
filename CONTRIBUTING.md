@@ -31,9 +31,15 @@ cargo build --target wasm32-unknown-unknown --release
 
 ## Pre-commit Hooks (DO-013)
 
-A `.pre-commit-config.yaml` is provided at the repository root. It runs
-`cargo fmt --check` and `cargo clippy -- -D warnings` automatically before
-every commit, catching formatting and lint issues locally before CI sees them.
+A `.pre-commit-config.yaml` is provided at the repository root. It runs hooks
+at two stages to catch issues as early as possible — **before** CI ever sees
+your code:
+
+| Stage | Hook | What it catches |
+|---|---|---|
+| `pre-commit` | `cargo fmt --check` | Unformatted Rust code |
+| `pre-commit` | `cargo clippy -D warnings` | Lint warnings |
+| `pre-push` | `cargo test --all-features --locked` | Failing tests |
 
 ### Installation
 
@@ -45,17 +51,28 @@ every commit, catching formatting and lint issues locally before CI sees them.
    brew install pre-commit
    ```
 
-2. Install the hooks into your local clone (one-time setup):
+2. Install **both** hook stages into your local clone (one-time setup):
 
    ```bash
+   # Registers the pre-commit stage
    pre-commit install
+   # Registers the pre-push stage
+   pre-commit install --hook-type pre-push
    ```
 
-3. The hooks now run automatically on every `git commit`. To run them manually
-   against all files at any time:
+   Or install both in one command:
+
+   ```bash
+   pre-commit install --install-hooks
+   ```
+
+3. The hooks run automatically on every `git commit` (fmt + clippy) and every
+   `git push` (tests). To run all hooks manually against all files:
 
    ```bash
    pre-commit run --all-files
+   # or for the push-stage hooks only:
+   pre-commit run --hook-stage pre-push --all-files
    ```
 
 > **Note:** The hooks require a working Rust toolchain with `rustfmt` and
@@ -116,7 +133,16 @@ Open a GitHub Issue with:
 
 ## Security Vulnerabilities
 
-Do **not** open a public issue for security vulnerabilities. Email the maintainers directly or use GitHub's private security advisory feature.
+Do **not** open a public issue for security vulnerabilities. Use one of the
+following private channels:
+
+- **GitHub private security advisory (preferred):**
+  https://github.com/queenannaE/pulsar-contracts/security/advisories/new
+- **Email the maintainers:** euniceoyiefieo@gmail.com
+  (subject line `[SECURITY] Pulsar — <short summary>`)
+
+See [SECURITY.md](SECURITY.md) for the full disclosure policy, response SLA,
+and the list of information to include in your report.
 
 ## License
 
