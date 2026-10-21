@@ -171,6 +171,15 @@ tool installation.
 
 **Prerequisites:** Docker Desktop (or Docker Engine + Compose plugin).
 
+> The dev image pins the Rust toolchain to the project MSRV (`1.79`). A
+> `.dockerignore` at the repo root keeps `docker compose build` fast by
+> excluding `target/`, `.git/`, and other local-only artefacts from the build
+> context. To build against a different Rust version, override the build arg:
+>
+> ```bash
+> docker compose build --build-arg RUST_VER=1.80.0
+> ```
+
 ```bash
 # 1. Start the local Stellar network and the dev container
 docker compose up -d
@@ -346,6 +355,17 @@ One-time initialisation. Caller becomes admin. Sets contract version to `1`.
 stellar contract invoke --id $CONTRACT_ID --source-account <KEY> --network local \
   -- set_admin --admin <ADDRESS>
 ```
+
+#### `transfer_admin`
+
+Two-step admin handoff. Both the current admin and the new admin must sign, proving the new key is live before the transfer is committed.
+
+```bash
+stellar contract invoke --id $CONTRACT_ID --source-account <CURRENT_ADMIN_KEY> --network local \
+  -- transfer_admin --current_admin <CURRENT_ADMIN_ADDRESS> --new_admin <NEW_ADMIN_ADDRESS>
+```
+
+Emits `admin_transferred` with payload `(current_admin, new_admin)`.
 
 #### `get_version`
 
@@ -747,6 +767,7 @@ The contract implements a **hybrid analytics approach**:
 | Event | Emitted by |
 |---|---|
 | `admin_set` | `set_admin` |
+| `admin_transferred` | `transfer_admin` — payload: `(current_admin, new_admin)` |
 | `merchant_registered` | `register_merchant` |
 | `merchant_deactivated` | `deactivate_merchant` |
 | `payment_processed` | `process_payment_with_signature` |
@@ -775,7 +796,7 @@ The contract implements a **hybrid analytics approach**:
 | 22 | `InvalidAmount` | Amount ≤ 0 |
 | 23 | `InvalidSignature` | Signature verification failed |
 | 24 | `PaymentExpired` | Order past `expires_at` |
-| 25 | `InsufficientBalance` | Merchant balance too low for refund |
+| 25 | `InsufficientBalance` | Payer or merchant token balance too low for the transfer |
 | 30 | `RefundNotFound` | Refund ID not found |
 | 31 | `RefundAlreadyExists` | Duplicate refund ID |
 | 32 | `RefundWindowExpired` | Past 30-day refund window |
@@ -806,7 +827,28 @@ Soroban persistent storage entries expire after a ledger TTL. Without active ren
 - A record's TTL is reset to ~1 year on every read or write.
 - Records that are never accessed will expire after ~1 year and be evicted by the network.
 - Frequently accessed records (active merchants, recent payments) are automatically kept alive.
-- Instance storage (admin, config, stats) is managed by the Soroban host and does not require manual TTL extension.
+
+**Covered entry types** (all persistent keys have TTL extended on read and write):
+
+| Entry type | Storage key |
+|---|---|
+| Payment records | `DataKey::Payment(order_id)` |
+| Archived payment tombstones | `DataKey::ArchivedPayment(order_id)` |
+| Merchant profiles | `DataKey::Merchant(address)` |
+| Merchant payment index | `DataKey::MerchantPayments(address)` |
+| Payer payment index | `DataKey::PayerPayments(address)` |
+| Global payment index | `DataKey::GlobalPaymentIndex` |
+| Refund records | `DataKey::Refund(refund_id)` |
+| All-refunds index | `DataKey::AllRefunds` |
+| Per-order refund count | `DataKey::OrderRefundCount(order_id)` |
+| Multi-sig payments | `DataKey::Multisig(payment_id)` |
+| Whitelist entries | `DataKey::Whitelist(address)` |
+| Token allowlist entries | `DataKey::AllowedToken(token)` |
+| Subscription states | `DataKey::Subscription(id)` |
+| Merchant subscription index | `DataKey::MerchantSubscriptions(address)` |
+| Merchant stats | `DataKey::MerchantStats(address)` |
+
+**Instance storage** (admin config, global stats, cleanup period, multisig expiry) uses a separate TTL managed via `storage::bump_instance_ttl()`, which is called at the start of every public contract invocation. A public `bump_instance_ttl(env)` function is also available so anyone can keep the contract alive during periods of low activity.
 
 ---
 
