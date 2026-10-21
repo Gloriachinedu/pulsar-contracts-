@@ -131,6 +131,34 @@ fn test_get_version_after_set_admin() {
     assert_eq!(client.get_version(), 1);
 }
 
+/// SC-028: ContractVersion is stored in instance storage during set_admin.
+/// get_version before set_admin returns 0 (the default for missing keys).
+#[test]
+fn test_get_version_before_init_returns_zero() {
+    let (env, client) = setup();
+    // No set_admin called — version key is absent; must default to 0.
+    assert_eq!(client.get_version(), 0);
+}
+
+/// SC-028: upgrade() must be admin-only; a non-admin address must be rejected.
+///
+/// Note: a full end-to-end upgrade test (calling upgrade() with a real WASM
+/// hash) requires uploading compiled WASM bytes and is covered by integration
+/// tests. Unit tests can only verify the auth guard.
+#[test]
+fn test_upgrade_non_admin_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admins(&env, &admin), &1);
+
+    let dummy_hash = BytesN::from_array(&env, &[0u8; 32]);
+    assert_eq!(
+        client.try_upgrade(&non_admin, &dummy_hash),
+        Err(Ok(PaymentError::Unauthorized))
+    );
+}
+
 #[test]
 fn test_ping() {
     let (env, client) = setup();
@@ -930,6 +958,10 @@ fn test_set_cleanup_period() {
     client.set_payment_cleanup_period(&admins(&env, &admin), &86400);
 }
 
+/// T-007: Passing `period = 0` to `set_payment_cleanup_period` must return
+/// `InvalidInput`. The zero-period guard exists in the implementation but
+/// was previously untested.
+/// Closes: <https://github.com/queenannaE/pulsar-contracts/issues/37>
 #[test]
 fn test_set_cleanup_period_zero_fails() {
     let (env, client) = setup();
@@ -941,6 +973,9 @@ fn test_set_cleanup_period_zero_fails() {
     );
 }
 
+/// T-007: A valid (non-zero) period must be persisted and used by
+/// `cleanup_expired_payments`.
+/// Closes: <https://github.com/queenannaE/pulsar-contracts/issues/37>
 #[test]
 fn test_set_cleanup_period_valid_is_persisted() {
     let (env, client) = setup();
@@ -2253,5 +2288,182 @@ fn test_signature_over_different_amount_rejected() {
     assert!(
         result.is_err(),
         "Expected signature verification to fail when amount differs, but got Ok"
+    );
+}
+
+// ── T-001: Real ed25519 key pair signature tests (dedicated) ─────────────────
+//
+// These tests exercise the actual ed25519_verify host function. mock_all_auths
+// is used only to bypass Soroban account authorisation (which is orthogonal to
+// payment signature verification). The crypto path is NOT mocked.
+
+/// T-001-A: A payment signed with a real ed25519 key succeeds end-to-end.
+/// This is the canonical happy-path: key pair generated, full XDR payload
+/// signed, payment processed — no mock_all_auths bypass of crypto.
+#[test]
+fn test_t001_real_ed25519_valid_signature_accepted() {
+    let env = Env::default();
+    // mock_all_auths only bypasses Soroban account-level auth checks.
+    // env.crypto().ed25519_verify is a real implementation and is NOT mocked.
+    env.mock_all_auths();
+    let contract_id = env.register(PaymentContract, ());
+    let client = PaymentContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let token = create_token(&env, &admin);
+
+    let seed = [7u8; 32];
+    let signing_key = SigningKey::from_bytes(&seed);
+    let pub_key_bytes = signing_key.verifying_key().to_bytes();
+    let merchant_pub_key = BytesN::from_array(&env, &pub_key_bytes);
+
+    client.set_admin(&vec![&env, admin.clone()], &1);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "T001Store"),
+        &str(&env, "ed25519 test store"),
+        &str(&env, "t001@store.com"),
+        &MerchantCategory::Retail,
+        &Some(merchant_pub_key.clone()),
+    );
+    mint(&env, &token, &payer, 5000);
+
+    let order = PaymentOrder {
+        order_id: bytes(&env, "T001_ORDER"),
+        merchant_address: merchant.clone(),
+        payer: payer.clone(),
+        token: token.clone(),
+        amount: 1000,
+        description: str(&env, "T001 payment"),
+        expires_at: 0,
+    };
+
+    // Sign the full XDR payload — this is exactly what the contract verifies.
+    let (_, sig) = sign_order_xdr(&env, &order, &seed);
+
+    // Must succeed: valid key pair, correct payload, matching signature.
+    client.process_payment_with_signature(&payer, &order, &sig, &merchant_pub_key);
+
+    let record = client.get_payment_by_id(&payer, &bytes(&env, "T001_ORDER"));
+    assert_eq!(record.amount, 1000);
+    assert_eq!(record.status, PaymentStatus::Completed);
+}
+
+/// T-001-B: A payment whose signature has been tampered must be rejected.
+/// Flipping a single byte in the signature must cause ed25519_verify to trap.
+#[test]
+fn test_t001_tampered_signature_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(PaymentContract, ());
+    let client = PaymentContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let token = create_token(&env, &admin);
+
+    let seed = [8u8; 32];
+    let signing_key = SigningKey::from_bytes(&seed);
+    let pub_key_bytes = signing_key.verifying_key().to_bytes();
+    let merchant_pub_key = BytesN::from_array(&env, &pub_key_bytes);
+
+    client.set_admin(&vec![&env, admin.clone()], &1);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "T001TamperedStore"),
+        &str(&env, "tampered sig store"),
+        &str(&env, "tamper@store.com"),
+        &MerchantCategory::Retail,
+        &Some(merchant_pub_key.clone()),
+    );
+    mint(&env, &token, &payer, 5000);
+
+    let order = PaymentOrder {
+        order_id: bytes(&env, "T001_TAMPER"),
+        merchant_address: merchant.clone(),
+        payer: payer.clone(),
+        token: token.clone(),
+        amount: 1000,
+        description: str(&env, "T001 tampered"),
+        expires_at: 0,
+    };
+
+    // Produce a valid signature then corrupt one byte.
+    let (_, valid_sig) = sign_order_xdr(&env, &order, &seed);
+    let mut sig_bytes = valid_sig.to_array();
+    sig_bytes[0] ^= 0xFF;
+    let tampered_sig = BytesN::from_array(&env, &sig_bytes);
+
+    // The host traps on invalid signature — try_ captures the error.
+    let result =
+        client.try_process_payment_with_signature(&payer, &order, &tampered_sig, &merchant_pub_key);
+    assert!(
+        result.is_err(),
+        "Expected signature verification to fail for tampered signature, got Ok"
+    );
+}
+
+/// T-001-C: A signature produced for one payload must not validate a different payload.
+/// Signing ORDER_A and submitting against ORDER_B (different order_id) must fail.
+#[test]
+fn test_t001_signature_for_wrong_order_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(PaymentContract, ());
+    let client = PaymentContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let token = create_token(&env, &admin);
+
+    let seed = [9u8; 32];
+    let signing_key = SigningKey::from_bytes(&seed);
+    let pub_key_bytes = signing_key.verifying_key().to_bytes();
+    let merchant_pub_key = BytesN::from_array(&env, &pub_key_bytes);
+
+    client.set_admin(&vec![&env, admin.clone()], &1);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "T001ReplayStore"),
+        &str(&env, "replay attack store"),
+        &str(&env, "replay@store.com"),
+        &MerchantCategory::Retail,
+        &Some(merchant_pub_key.clone()),
+    );
+    mint(&env, &token, &payer, 5000);
+
+    // Build two orders that differ only in order_id.
+    let order_a = PaymentOrder {
+        order_id: bytes(&env, "T001_ORDER_A"),
+        merchant_address: merchant.clone(),
+        payer: payer.clone(),
+        token: token.clone(),
+        amount: 1000,
+        description: str(&env, "order A"),
+        expires_at: 0,
+    };
+    let order_b = PaymentOrder {
+        order_id: bytes(&env, "T001_ORDER_B"),
+        merchant_address: merchant.clone(),
+        payer: payer.clone(),
+        token: token.clone(),
+        amount: 1000,
+        description: str(&env, "order A"),
+        expires_at: 0,
+    };
+
+    // Sign order_a's XDR payload, then try to use that sig for order_b.
+    let (_, sig_a) = sign_order_xdr(&env, &order_a, &seed);
+
+    // order_b has a different XDR serialisation (different order_id), so sig_a must fail.
+    let result =
+        client.try_process_payment_with_signature(&payer, &order_b, &sig_a, &merchant_pub_key);
+    assert!(
+        result.is_err(),
+        "Expected signature verification to fail when order_id differs, got Ok"
     );
 }

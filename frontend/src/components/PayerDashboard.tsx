@@ -3,6 +3,7 @@ import { useWallet } from "../useWallet";
 import { FilterBar } from "./FilterBar";
 import { PaymentTable } from "./PaymentTable";
 import { ErrorMessage } from "./ContractCallStatus";
+import { WalletReconnectPrompt } from "./WalletReconnectPrompt";
 import { fetchPayerHistory } from "../contract";
 import type { PaymentRecord, PaymentFilter } from "../contract";
 
@@ -56,7 +57,7 @@ function writeDashboardState(
 }
 
 export function PayerDashboard() {
-  const { address, error: walletError, connect, disconnect } = useWallet();
+  const { address, error: walletError, status: walletStatus, showReconnectPrompt, connect, disconnect, dismissReconnectPrompt } = useWallet();
 
   const [records, setRecords] = useState<PaymentRecord[]>([]);
   const [cursorStack, setCursorStack] = useState<(string | null)[]>([null]);
@@ -142,11 +143,25 @@ export function PayerDashboard() {
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: 24, fontFamily: "system-ui, sans-serif" }}>
       <h1 style={{ marginBottom: 4 }}>Pulsar — Payer Dashboard</h1>
 
+      {/* Reconnect prompt — shown when wallet session expires */}
+      {showReconnectPrompt && (
+        <div style={{ marginBottom: 16 }}>
+          <WalletReconnectPrompt
+            onReconnect={connect}
+            onDismiss={dismissReconnectPrompt}
+          />
+        </div>
+      )}
+
       {!address ? (
         <div>
           <p style={{ color: "#64748b" }}>Connect your Freighter wallet to view your payment history.</p>
-          <button onClick={connect} style={btnStyle("#6366f1")}>
-            Connect Freighter
+          <button
+            onClick={connect}
+            disabled={walletStatus === "connecting"}
+            style={btnStyle("#6366f1")}
+          >
+            {walletStatus === "connecting" ? "Connecting…" : "Connect Freighter"}
           </button>
           {walletError && <ErrorMessage message={walletError} />}
         </div>

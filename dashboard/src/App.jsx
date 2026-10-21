@@ -3,9 +3,10 @@ import { useWallet } from './hooks/useWallet';
 import PaymentHistory from './components/PaymentHistory';
 import RefundManager from './components/RefundManager';
 import MerchantProfile from './components/MerchantProfile';
+import AdminPanel from './components/AdminPanel';
 import './App.css';
 
-const TABS = ['Payments', 'Refunds', 'Profile'];
+const TABS = ['Payments', 'Refunds', 'Profile', 'Admin'];
 
 export default function App() {
   const { publicKey, connect, disconnect, error } = useWallet();
@@ -70,6 +71,7 @@ export default function App() {
             {tab === 'Payments' && <PaymentHistory merchantAddress={publicKey} />}
             {tab === 'Refunds'  && <RefundManager  merchantAddress={publicKey} />}
             {tab === 'Profile'  && <MerchantProfile publicKey={publicKey} />}
+            {tab === 'Admin'    && <AdminPanel      adminAddress={publicKey} />}
           </div>
         </main>
       )}
