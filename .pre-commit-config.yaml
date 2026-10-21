@@ -1,3 +1,16 @@
+# Default hook types to install — registers both pre-commit and pre-push hooks
+# so that formatting/linting failures are caught locally both on commit and
+# before a push reaches CI.  Run once after cloning:
+#
+#   pip install pre-commit
+#   pre-commit install          # installs pre-commit stage
+#   pre-commit install --hook-type pre-push   # installs pre-push stage
+#
+# Or simply:
+#   pre-commit install --install-hooks
+#
+default_install_hook_types: [pre-commit, pre-push]
+
 repos:
   - repo: local
     hooks:
@@ -8,6 +21,7 @@ repos:
         entry: cargo fmt --all -- --check
         types: [rust]
         pass_filenames: false
+        stages: [pre-commit]
 
       - id: cargo-clippy
         name: cargo clippy
@@ -16,3 +30,15 @@ repos:
         entry: cargo clippy --all-targets --all-features -- -D warnings
         types: [rust]
         pass_filenames: false
+        stages: [pre-commit]
+
+      - id: cargo-test
+        name: cargo test
+        description: >
+          Run the full test suite before pushing. Runs on pre-push only to avoid
+          slowing down every commit — tests are typically fast in this workspace
+          but slower than fmt/clippy.
+        language: system
+        entry: bash -c 'cd contracts/payment-processing-contract && cargo test --all-features --locked'
+        pass_filenames: false
+        stages: [pre-push]
