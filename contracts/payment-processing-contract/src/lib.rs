@@ -687,6 +687,125 @@ impl PaymentContract {
         Ok(())
     }
 
+    /// Process multiple payments from the same payer in a single contract
+    /// invocation (MISC-011), avoiding the fee/latency overhead of one
+    /// transaction per payment (e.g. a marketplace collecting several
+    /// merchant payouts at once).
+    ///
+    /// Unlike [`Self::process_payment_with_signature`], batch orders are not
+    /// individually signature-verified by a merchant key; the payer alone
+    /// authorises the whole batch via `require_auth`. Signature-verified
+    /// payments should still use `process_payment_with_signature` one at a
+    /// time.
+    ///
+    /// # Atomicity
+    /// All orders in `orders` succeed or the entire call fails and every
+    /// state change (payment records, indexes, stats, and token transfers)
+    /// is rolled back. This holds because `process_batch_payments` is a
+    /// single contract entry point: returning `Err` for any order aborts
+    /// the whole host invocation, and the Soroban host reverts all ledger
+    /// writes performed during a failed invocation. There is no partial
+    /// commit path.
+    ///
+    /// # Parameters
+    /// - `payer` — The paying address; must be authenticated once for the
+    ///   whole batch.
+    /// - `orders` — The payment orders to process, in order. Each order's
+    ///   `payer` field must equal `payer`.
+    ///
+    /// # Errors
+    /// - [`PaymentError::InvalidInput`] if `orders` is empty or exceeds
+    ///   [`storage::MAX_BATCH_PAYMENTS`].
+    /// - Any error that [`Self::process_payment_with_signature`]-style
+    ///   per-order validation can return (e.g. [`PaymentError::InvalidAmount`],
+    ///   [`PaymentError::PaymentAlreadyExists`], [`PaymentError::MerchantNotFound`],
+    ///   [`PaymentError::MerchantInactive`], [`PaymentError::TokenNotAllowed`],
+    ///   [`PaymentError::PaymentExpired`], [`PaymentError::InsufficientBalance`])
+    ///   for any single order aborts the entire batch.
+    pub fn process_batch_payments(
+        env: Env,
+        payer: Address,
+        orders: Vec<PaymentOrder>,
+    ) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) {
+            return Err(PaymentError::ContractPaused);
+        }
+        payer.require_auth();
+
+        if orders.is_empty() || orders.len() > storage::MAX_BATCH_PAYMENTS {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        let now = env.ledger().timestamp();
+        let allowlist_enabled = storage::is_token_allowlist_enabled(&env);
+
+        for order in orders.iter() {
+            if order.payer != payer {
+                return Err(PaymentError::InvalidInput);
+            }
+            helper::validate_amount(order.amount)?;
+            helper::validate_order_id(&order.order_id)?;
+            if storage::get_payment(&env, &order.order_id).is_some() {
+                return Err(PaymentError::PaymentAlreadyExists);
+            }
+            if order.expires_at > 0 && now > order.expires_at {
+                return Err(PaymentError::PaymentExpired);
+            }
+            // SEC-009: enforce token allowlist when enabled
+            if allowlist_enabled && !storage::is_token_allowed(&env, &order.token) {
+                return Err(PaymentError::TokenNotAllowed);
+            }
+            let merchant = storage::get_merchant(&env, &order.merchant_address)
+                .ok_or(PaymentError::MerchantNotFound)?;
+            if !merchant.active {
+                return Err(PaymentError::MerchantInactive);
+            }
+
+            let record = PaymentRecord {
+                order_id: order.order_id.clone(),
+                merchant_address: order.merchant_address.clone(),
+                payer: payer.clone(),
+                token: order.token.clone(),
+                amount: order.amount,
+                refunded_amount: 0,
+                pending_refund_amount: 0,
+                status: PaymentStatus::Completed,
+                paid_at: now,
+                description: order.description.clone(),
+            };
+            storage::save_payment(&env, &record);
+            storage::push_merchant_payment_id(&env, &order.merchant_address, &order.order_id);
+            storage::push_payer_payment_id(&env, &payer, &order.order_id);
+            storage::push_global_payment_id(&env, &order.order_id);
+            storage::increment_payment_stats(&env, order.amount)?;
+
+            // Same CEI ordering as process_payment_with_signature (SC-011):
+            // all storage writes above happen before the external token
+            // transfer below.
+            let token_client = token::Client::new(&env, &order.token);
+            if token_client.balance(&payer) < order.amount {
+                return Err(PaymentError::InsufficientBalance);
+            }
+            token_client.transfer(&payer, &order.merchant_address, &order.amount);
+            env.events().publish(
+                (String::from_str(&env, "payment_processed"),),
+                (
+                    order.order_id.clone(),
+                    payer.clone(),
+                    order.merchant_address.clone(),
+                    order.amount,
+                ),
+            );
+        }
+
+        env.events().publish(
+            (String::from_str(&env, "batch_payment_processed"),),
+            (payer, orders.len()),
+        );
+        Ok(())
+    }
+
     // ── Payment queries ───────────────────────────────────────────────────────
 
     /// Retrieve a single payment record by its order ID.

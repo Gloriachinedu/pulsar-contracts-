@@ -454,6 +454,12 @@ pub const DEFAULT_MULTISIG_EXPIRY: u64 = 86_400;
 pub const MAX_SIGNERS: u32 = 10;
 /// Maximum number of pending refunds per order
 pub const MAX_PENDING_REFUNDS: u32 = 10;
+/// Maximum number of payment orders accepted in a single
+/// `process_batch_payments` call (MISC-011). Keeps a single batch
+/// invocation within the ledger's CPU/memory budget and bounds the
+/// amount of per-order work (validation + token transfer) that must
+/// succeed atomically for the batch to commit.
+pub const MAX_BATCH_PAYMENTS: u32 = 10;
 /// Maximum number of payment IDs tracked per merchant or payer in the
 /// in-contract index (SC-013). Older IDs are evicted (FIFO) from the index
 /// once the cap is reached; the full `PaymentRecord` objects remain in
