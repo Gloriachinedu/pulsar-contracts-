@@ -31,9 +31,15 @@ cargo build --target wasm32-unknown-unknown --release
 
 ## Pre-commit Hooks (DO-013)
 
-A `.pre-commit-config.yaml` is provided at the repository root. It runs
-`cargo fmt --check` and `cargo clippy -- -D warnings` automatically before
-every commit, catching formatting and lint issues locally before CI sees them.
+A `.pre-commit-config.yaml` is provided at the repository root. It runs hooks
+at two stages to catch issues as early as possible — **before** CI ever sees
+your code:
+
+| Stage | Hook | What it catches |
+|---|---|---|
+| `pre-commit` | `cargo fmt --check` | Unformatted Rust code |
+| `pre-commit` | `cargo clippy -D warnings` | Lint warnings |
+| `pre-push` | `cargo test --all-features --locked` | Failing tests |
 
 ### Installation
 
@@ -45,17 +51,28 @@ every commit, catching formatting and lint issues locally before CI sees them.
    brew install pre-commit
    ```
 
-2. Install the hooks into your local clone (one-time setup):
+2. Install **both** hook stages into your local clone (one-time setup):
 
    ```bash
+   # Registers the pre-commit stage
    pre-commit install
+   # Registers the pre-push stage
+   pre-commit install --hook-type pre-push
    ```
 
-3. The hooks now run automatically on every `git commit`. To run them manually
-   against all files at any time:
+   Or install both in one command:
+
+   ```bash
+   pre-commit install --install-hooks
+   ```
+
+3. The hooks run automatically on every `git commit` (fmt + clippy) and every
+   `git push` (tests). To run all hooks manually against all files:
 
    ```bash
    pre-commit run --all-files
+   # or for the push-stage hooks only:
+   pre-commit run --hook-stage pre-push --all-files
    ```
 
 > **Note:** The hooks require a working Rust toolchain with `rustfmt` and
@@ -77,11 +94,40 @@ every commit, catching formatting and lint issues locally before CI sees them.
 
 The `main` branch is protected with the following enforced settings:
 
-- **Required reviews**: at least 1 approving review before merging.
-- **Required status checks**: all CI jobs (`test`, `build`, `security-audit`) must pass.
-- **No direct pushes**: commits must be submitted via a pull request; force-pushes are disabled.
+| Rule | Setting |
+|------|---------|
+| Required approving reviews | At least **1** before merging |
+| Dismiss stale reviews | Yes — a new push dismisses existing approvals |
+| Required status checks | All CI jobs must pass (see list below) |
+| Require branches to be up to date | Yes — branch must be up to date with `main` before merge |
+| No direct pushes | All changes must arrive via a pull request |
+| No force-pushes | `git push --force` to `main` is rejected |
+| No branch deletion | `main` cannot be deleted |
 
-These rules are enforced via GitHub branch protection settings. Contributors cannot bypass them.
+### Required CI status checks
+
+The following jobs in `.github/workflows/ci.yml` must all pass before merging:
+
+- `test (stable)` — unit tests on stable Rust toolchain
+- `test (1.79.0)` — unit tests on the declared MSRV
+- `build` — WASM artifact compiles and passes the binary size gate
+- `security-audit` — `cargo audit` reports no known vulnerabilities
+- `deny` — `cargo deny check` (licence and duplicate-crate policy)
+- `coverage` — generates test coverage report (warning only, does not block)
+
+### Why these rules exist
+
+- **Required review**: ensures at least one other maintainer has read every
+  change before it lands.
+- **Up-to-date branch**: prevents a PR that passed CI from landing on a `main`
+  that has since moved forward, which could re-introduce a regression.
+- **No direct push / no force-push**: the `main` branch is the source of truth
+  for contract deployments; every change must be traceable to a PR review.
+
+These rules are enforced via GitHub branch protection settings. Contributors
+cannot bypass them. Maintainers (repo admins) can view and edit the settings
+at:
+`https://github.com/queenannaE/pulsar-contracts/settings/branches`
 
 ## Pull Request Guidelines
 
@@ -116,7 +162,16 @@ Open a GitHub Issue with:
 
 ## Security Vulnerabilities
 
-Do **not** open a public issue for security vulnerabilities. Email the maintainers directly or use GitHub's private security advisory feature.
+Do **not** open a public issue for security vulnerabilities. Use one of the
+following private channels:
+
+- **GitHub private security advisory (preferred):**
+  https://github.com/queenannaE/pulsar-contracts/security/advisories/new
+- **Email the maintainers:** euniceoyiefieo@gmail.com
+  (subject line `[SECURITY] Pulsar — <short summary>`)
+
+See [SECURITY.md](SECURITY.md) for the full disclosure policy, response SLA,
+and the list of information to include in your report.
 
 ## License
 
