@@ -1,6 +1,7 @@
 import React from "react";
 import { Spinner } from "./ContractCallStatus";
 import type { PaymentRecord } from "../contract";
+import "./PaymentTable.css";
 
 interface Props {
   records: PaymentRecord[];
@@ -24,38 +25,57 @@ export function PaymentTable({ records, loading }: Props) {
   if (!records.length) return <p>No payments found.</p>;
 
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-      <thead>
-        <tr style={{ background: "#f1f5f9" }}>
-          {["Order ID", "Merchant", "Token", "Amount", "Date", "Status"].map((h) => (
-            <th key={h} style={{ padding: "8px 12px", textAlign: "left", borderBottom: "1px solid #e2e8f0" }}>
-              {h}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {records.map((r) => (
-          <tr key={r.order_id} style={{ borderBottom: "1px solid #e2e8f0" }}>
-            <td style={{ padding: "8px 12px", fontFamily: "monospace" }}>{r.order_id}</td>
-            <td style={{ padding: "8px 12px", fontFamily: "monospace" }}>
-              {r.merchant_address.slice(0, 8)}…{r.merchant_address.slice(-4)}
-            </td>
-            <td style={{ padding: "8px 12px", fontFamily: "monospace" }}>
-              {r.token.slice(0, 8)}…{r.token.slice(-4)}
-            </td>
-            <td style={{ padding: "8px 12px" }}>{r.amount}</td>
-            <td style={{ padding: "8px 12px" }}>
-              {new Date(r.paid_at * 1000).toLocaleString()}
-            </td>
-            <td style={{ padding: "8px 12px" }}>
-              <span style={{ color: STATUS_COLOR[r.status] ?? "#64748b", fontWeight: 600 }}>
-                {r.status}
-              </span>
-            </td>
-          </tr>
+    <>
+      <div className="payment-table__desktop" role="region" aria-label="Payment history">
+        <table className="payment-table">
+          <thead>
+            <tr>
+              {["Order ID", "Merchant", "Token", "Amount", "Date", "Status"].map((heading) => (
+                <th key={heading} scope="col">{heading}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {records.map((record) => (
+              <tr key={record.order_id}>
+                <td className="payment-table__mono">{record.order_id}</td>
+                <td className="payment-table__mono">
+                  {record.merchant_address.slice(0, 8)}…{record.merchant_address.slice(-4)}
+                </td>
+                <td className="payment-table__mono">
+                  {record.token.slice(0, 8)}…{record.token.slice(-4)}
+                </td>
+                <td>{record.amount}</td>
+                <td>{new Date(record.paid_at * 1000).toLocaleString()}</td>
+                <td>
+                  <span style={{ color: STATUS_COLOR[record.status] ?? "#64748b", fontWeight: 600 }}>
+                    {record.status}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <ul className="payment-table__cards" aria-label="Payment history">
+        {records.map((record) => (
+          <li className="payment-table__card" key={record.order_id}>
+            <dl>
+              <div><dt>Order ID</dt><dd className="payment-table__mono">{record.order_id}</dd></div>
+              <div><dt>Merchant</dt><dd className="payment-table__mono">{record.merchant_address}</dd></div>
+              <div><dt>Token</dt><dd className="payment-table__mono">{record.token}</dd></div>
+              <div><dt>Amount</dt><dd>{record.amount}</dd></div>
+              <div><dt>Date</dt><dd>{new Date(record.paid_at * 1000).toLocaleString()}</dd></div>
+              <div>
+                <dt>Status</dt>
+                <dd style={{ color: STATUS_COLOR[record.status] ?? "#64748b", fontWeight: 600 }}>
+                  {record.status}
+                </dd>
+              </div>
+            </dl>
+          </li>
         ))}
-      </tbody>
-    </table>
+      </ul>
+    </>
   );
 }
