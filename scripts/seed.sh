@@ -79,7 +79,21 @@ main() {
     log_info "Token: $TOKEN_CODE"
     log_info "Payer: $PAYER_ACCOUNT"
     echo ""
-    
+
+    # Validate the counts parsed from the config file are non-empty positive
+    # integers before they are used in `seq`/array indexing below. A missing
+    # or malformed [merchants]/[payments]/[refunds] "count" key previously
+    # caused confusing failures deep inside the merchant/payment/refund loops
+    # (e.g. "seq: invalid argument") instead of a clear, actionable error.
+    for pair in "merchants.count:$MERCHANT_COUNT" "payments.count:$PAYMENT_COUNT" "refunds.count:$REFUND_COUNT"; do
+        name="${pair%%:*}"
+        value="${pair#*:}"
+        if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 1 ]; then
+            log_error "Invalid or missing '$name' in $CONFIG_FILE: expected a positive integer, got '$value'"
+            exit 1
+        fi
+    done
+
     # Verify Stellar CLI is available
     log_info "Checking Stellar CLI..."
     if ! command -v stellar &> /dev/null; then
