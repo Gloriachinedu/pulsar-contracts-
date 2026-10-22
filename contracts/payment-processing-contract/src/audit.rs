@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /// Audit Module
 /// 
 /// Implements audit logging for immutable storage of all state-changing operations.

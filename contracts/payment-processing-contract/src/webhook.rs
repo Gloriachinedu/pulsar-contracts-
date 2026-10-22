@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /// Webhook Management System
 /// 
 /// Infrastructure for notifying external systems of payment events (completed, failed, refunded, etc.).

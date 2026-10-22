@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /// Connection Pooling Module
 /// 
 /// Optimizes contract state access patterns and manages efficient resource allocation.
