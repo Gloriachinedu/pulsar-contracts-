@@ -14,6 +14,28 @@ Merchant categories are currently implemented as a fixed enum. Adding new catego
 - **Digital** — Software, SaaS, digital products
 - **Other** — Miscellaneous categories
 
+## Current Implementation Reference
+
+The enum lives at `contracts/payment-processing-contract/src/types.rs:9-15`:
+
+```rust
+pub enum MerchantCategory {
+    Retail,
+    Food,
+    Services,
+    Digital,
+    Other,
+}
+```
+
+It is used by `Merchant.category` (`types.rs:19-28`) and is accepted as a
+`category: MerchantCategory` parameter by `register_merchant`
+(`contracts/payment-processing-contract/src/lib.rs:258-264`) — the only
+contract entry point that currently sets it; there is no separate
+category-update function. Keep this section in sync with the enum's actual
+location when it moves, so the migration steps below always target the real
+definition.
+
 ## Adding a New Category
 
 ### Step 1: Update the Enum

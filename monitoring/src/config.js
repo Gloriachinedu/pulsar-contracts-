@@ -24,6 +24,13 @@ const config = {
    */
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "15000", 10),
 
+  /**
+   * How often (ms) to call the contract's `ping` health-check endpoint
+   * (BE-007).  A successful `ping` response confirms the contract is live and
+   * returns the current ledger timestamp.  Default: 300 000 ms (5 minutes).
+   */
+  pingIntervalMs: parseInt(process.env.PING_INTERVAL_MS || "300000", 10),
+
   // ── Alert thresholds ───────────────────────────────────────────────────────
 
   /**

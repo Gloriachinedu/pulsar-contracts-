@@ -1,0 +1,77 @@
+.payment-table__desktop {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.payment-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  table-layout: fixed;
+}
+
+.payment-table th,
+.payment-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid #e2e8f0;
+  overflow-wrap: anywhere;
+}
+
+.payment-table th {
+  background: #f1f5f9;
+}
+
+.payment-table__mono {
+  font-family: monospace;
+  overflow-wrap: anywhere;
+}
+
+.payment-table__cards {
+  display: none;
+}
+
+@media (max-width: 639px) {
+  .payment-table__desktop {
+    display: none;
+  }
+
+  .payment-table__cards {
+    display: grid;
+    gap: 12px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .payment-table__card {
+    min-width: 0;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 12px;
+  }
+
+  .payment-table__card dl {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+  }
+
+  .payment-table__card dl > div {
+    display: grid;
+    grid-template-columns: minmax(74px, 0.6fr) minmax(0, 1.4fr);
+    align-items: start;
+    gap: 8px;
+  }
+
+  .payment-table__card dt {
+    font-weight: 600;
+  }
+
+  .payment-table__card dd {
+    min-width: 0;
+    margin: 0;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+}

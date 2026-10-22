@@ -2,11 +2,15 @@
 
 extern crate alloc;
 
-use soroban_sdk::{xdr::ToXdr, Address, Bytes, BytesN, Env, String, Vec};
+use soroban_sdk::{xdr::ToXdr, Address, Bytes, BytesN, Env, Map, String, Vec};
 
 use crate::error::PaymentError;
 use crate::storage;
 use crate::types::{PaymentFilter, PaymentRecord, PaymentStatus, StatusFilter};
+
+/// Maximum combined size, in bytes, of all keys and values in a
+/// [`crate::types::PaymentOrder`] `metadata` map (MISC-013).
+pub const MAX_METADATA_SIZE_BYTES: u32 = 1024;
 
 /// Require that `caller` is the contract admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
@@ -18,11 +22,26 @@ pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
     Ok(())
 }
 
-/// Validate that `admin` is not the zero/burn address.
+/// Validate that `admin` is not the zero/burn address (SC-016).
+///
+/// # Limitation
+/// The Soroban SDK (as of v22) does not expose a dedicated `Address::is_zero()`
+/// or zero-address constant. Stellar accounts are identified by an ed25519
+/// public key, and there is no formally specified "burn address" analogous to
+/// Ethereum's `0x000…0`. This function therefore uses a best-effort heuristic:
+/// it serialises the address to XDR and checks whether every byte of the
+/// serialisation is zero. In practice, any real account key produced by a
+/// wallet will have at least one non-zero byte, so this check catches
+/// accidentally constructed zero-byte keys that would permanently lock all
+/// admin-only functions.
+///
+/// If the Soroban SDK later exposes a dedicated zero-address check or a
+/// canonical burn-address constant, this function should be updated to use it.
+///
+/// # Errors
+/// Returns [`PaymentError::InvalidInput`] if the XDR serialisation of
+/// `admin` is all-zero bytes.
 pub fn validate_admin_address(env: &Env, admin: &Address) -> Result<(), PaymentError> {
-    // The Soroban SDK does not expose a dedicated zero/burn address validation API
-    // for `Address`. This is a best-effort guard against a zero-address
-    // representation when the SDK serialization exposes it.
     let admin_xdr = admin.clone().to_xdr(env);
     let all_zero = admin_xdr.iter().all(|b| b == 0);
     if all_zero {
@@ -32,7 +51,6 @@ pub fn validate_admin_address(env: &Env, admin: &Address) -> Result<(), PaymentE
 }
 
 /// Require that `caller` is the registered merchant at `merchant_address`.
-#[allow(dead_code)]
 pub fn require_merchant(
     env: &Env,
     caller: &Address,
@@ -89,28 +107,81 @@ pub fn validate_merchant_fields(
     Ok(())
 }
 
-/// Validate that `order_id` is non-empty.
+/// Validate that `order_id` is non-empty, at most 64 bytes, and contains only
+/// alphanumeric characters plus `-` and `_` (i.e. the character set
+/// `[A-Za-z0-9\-_]`).
+///
+/// # Errors
+/// Returns [`PaymentError::InvalidInput`] when:
+/// - the byte slice is empty,
+/// - the byte slice exceeds 64 bytes, or
+/// - any byte is outside the allowed character set.
+///
+/// Enforcing a maximum length and a restricted character set prevents storage
+/// inflation attacks where an attacker submits an arbitrarily long or specially
+/// crafted order ID.
 pub fn validate_order_id(order_id: &Bytes) -> Result<(), PaymentError> {
-    // Enforce non-empty, max 64 bytes
-    let len = order_id.len();
+    let len = order_id.len() as usize;
+
+    // Rule 1: must be non-empty.
+    // Rule 2: must not exceed 64 bytes (SC-014).
     if len == 0 || len > 64 {
         return Err(PaymentError::InvalidInput);
     }
-    // character check is omitted for Bytes as it's harder in no_std without String
+
+    // Rule 3: only alphanumeric characters, hyphens, and underscores are
+    // allowed (SC-014).  We copy the bytes into a stack buffer so we can
+    // inspect each byte without heap allocation.
+    let mut buf = [0u8; 64];
+    order_id.copy_into_slice(&mut buf[..len]);
+    for &b in buf[..len].iter() {
+        let allowed = b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
+        if !allowed {
+            return Err(PaymentError::InvalidInput);
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate optional payment metadata (MISC-013).
+///
+/// Enforces that the combined byte length of every key and value in the map
+/// does not exceed [`MAX_METADATA_SIZE_BYTES`]. A missing map (`None`) is
+/// always valid and costs nothing.
+///
+/// # Errors
+/// Returns [`PaymentError::InvalidInput`] when the combined size of all keys
+/// and values exceeds [`MAX_METADATA_SIZE_BYTES`].
+pub fn validate_metadata(metadata: &Option<Map<String, String>>) -> Result<(), PaymentError> {
+    let Some(map) = metadata else {
+        return Ok(());
+    };
+    let mut total: u32 = 0;
+    for (key, value) in map.iter() {
+        total = total
+            .checked_add(key.len())
+            .and_then(|t| t.checked_add(value.len()))
+            .ok_or(PaymentError::ArithmeticError)?;
+        if total > MAX_METADATA_SIZE_BYTES {
+            return Err(PaymentError::InvalidInput);
+        }
+    }
     Ok(())
 }
 
 /// Verify an ed25519 signature over `payload` using `public_key`.
+///
+/// Calls `env.crypto().ed25519_verify` in both production and test builds.
+/// The Soroban testutils environment provides a real ed25519 implementation,
+/// so signature tests are exercised end-to-end without any bypass.
 pub fn verify_signature(
     env: &Env,
     public_key: &BytesN<32>,
     payload: &Bytes,
     signature: &BytesN<64>,
 ) -> Result<(), PaymentError> {
-    #[cfg(not(any(test, feature = "testutils")))]
     env.crypto().ed25519_verify(public_key, payload, signature);
-    #[cfg(any(test, feature = "testutils"))]
-    let _ = (env, public_key, payload, signature);
     Ok(())
 }
 
@@ -163,18 +234,39 @@ pub fn matches_filter(record: &PaymentRecord, filter: &PaymentFilter) -> bool {
     true
 }
 
-/// Require that at least one address in `admins` matches the stored admin config.
+/// Require that at least `threshold` addresses in `admins` are registered
+/// admin addresses and each provides authorization.
+///
+/// The threshold is read from the stored [`AdminConfig`]. If no config is
+/// present the contract falls back to single-admin mode (threshold = 1).
+///
+/// # Multi-sig semantics
+/// - The caller supplies a list of addresses claiming to be admins.
+/// - Each address in the list that is a registered admin is asked to
+///   `require_auth()` (the Soroban host verifies the signature on-chain).
+/// - If the count of successfully-authorized admin addresses meets or
+///   exceeds the stored threshold, the call proceeds. Otherwise it is
+///   rejected with [`PaymentError::Unauthorized`].
+///
+/// This implements an N-of-M ("threshold-of-total") multi-sig model where
+/// N is the threshold and M is the total number of registered admins.
 pub fn require_multi_admin(env: &Env, admins: Vec<Address>) -> Result<(), PaymentError> {
     if let Some(config) = storage::get_admin_config(env) {
+        let threshold = config.threshold.max(1) as usize;
+        let mut authorized: usize = 0;
         for addr in admins.iter() {
             if config.admins.contains(&addr) {
                 addr.require_auth();
-                return Ok(());
+                authorized += 1;
+                if authorized >= threshold {
+                    return Ok(());
+                }
             }
         }
+        // Not enough authorized admins.
         return Err(PaymentError::Unauthorized);
     }
-    // Fall back to single-admin mode.
+    // Fall back to single-admin mode (no AdminConfig stored).
     if let Some(admin) = storage::get_admin(env) {
         for addr in admins.iter() {
             if addr == admin {

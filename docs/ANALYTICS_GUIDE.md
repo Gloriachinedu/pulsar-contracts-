@@ -56,11 +56,15 @@ stellar contract invoke --id $CONTRACT_ID --source-account <ADMIN_KEY> --network
 
 Query statistics for a specific merchant.
 
-**Function**: `get_merchant_stats(merchant, date_start, date_end)`
+**Function**: `get_merchant_stats(caller, merchant, date_start, date_end)`
+(implementation: `contracts/payment-processing-contract/src/lib.rs:859-865`;
+the previous revision of this doc omitted the required `caller` parameter)
 
-**Access**: 
-- Merchant can query their own stats
-- Admin can query any merchant's stats
+**Access**:
+- `caller == merchant` → the merchant queries their own stats
+- `caller != merchant` → `caller` must be an authorized admin (checked via
+  `helper::require_multi_admin`, lib.rs:865-869), otherwise the call fails
+  with `PaymentError::Unauthorized`
 
 **Returns**:
 ```rust
@@ -75,16 +79,18 @@ MerchantStats {
 
 **Example**:
 ```bash
-# Merchant queries their own stats
+# Merchant queries their own stats (caller == merchant)
 stellar contract invoke --id $CONTRACT_ID --source-account <MERCHANT_KEY> --network testnet \
   -- get_merchant_stats \
+  --caller <MERCHANT_ADDRESS> \
   --merchant <MERCHANT_ADDRESS> \
   --date_start null \
   --date_end null
 
-# Admin queries a merchant's stats
+# Admin queries a merchant's stats (caller == admin)
 stellar contract invoke --id $CONTRACT_ID --source-account <ADMIN_KEY> --network testnet \
   -- get_merchant_stats \
+  --caller <ADMIN_ADDRESS> \
   --merchant <MERCHANT_ADDRESS> \
   --date_start 1704067200 \
   --date_end 1704153600

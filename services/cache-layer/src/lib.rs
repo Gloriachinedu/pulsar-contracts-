@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};

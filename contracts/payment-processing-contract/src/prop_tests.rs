@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! T-011 — Property-based tests using `proptest`.
 //!
 //! These tests encode formal correctness properties for the three functions
@@ -65,6 +66,7 @@ fn make_record(amount: i128, paid_at: u64, status: PaymentStatus) -> PaymentReco
         status,
         paid_at,
         description: desc,
+        metadata: None,
     }
 }
 

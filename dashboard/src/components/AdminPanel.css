@@ -1,0 +1,159 @@
+/* AdminPanel styles */
+
+.ap { width: 100%; }
+
+.ap__prompt,
+.ap__status { color: var(--muted-text); padding: 1rem 0; }
+.ap__error   { color: var(--error); background: var(--error-bg); padding: 0.5rem 0.75rem; border-radius: 4px; margin-bottom: 0.75rem; }
+.ap__success { color: #155724; background: #d4edda; padding: 0.5rem 0.75rem; border-radius: 4px; margin-top: 0.75rem; }
+.ap__empty   { color: var(--muted-text); padding: 0.75rem 0; }
+.ap__muted   { color: var(--muted-text); }
+.ap__error-inline { font-size: 0.78rem; color: var(--error); display: block; margin-top: 0.2rem; }
+
+:root[data-theme='dark'] .ap__success { background: #1a3d27; color: #6fcf97; }
+
+/* ── Nav tabs ──────────────────────────────────────────────── */
+.ap__nav { margin-bottom: 1.25rem; }
+.ap__nav ul { list-style: none; padding: 0; margin: 0; display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.ap__nav button[role="tab"] { padding: 0.4rem 0.9rem; font-size: 0.875rem; border-radius: 4px; }
+.ap__nav button[aria-selected="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+
+/* ── Section titles ────────────────────────────────────────── */
+.ap__section-title { font-size: 1rem; font-weight: 700; margin-bottom: 1rem; color: var(--text); }
+.ap__description   { font-size: 0.9rem; color: var(--muted-text); margin-bottom: 1rem; max-width: 560px; }
+
+/* ── Stats grid ────────────────────────────────────────────── */
+.ap__stats-grid {
+  list-style: none;
+  padding: 0; margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+}
+
+.ap__stat-card {
+  background: var(--subtle-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.ap__stat-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted-text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ap__stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* ── Table ─────────────────────────────────────────────────── */
+.ap__table-wrap { overflow-x: auto; }
+
+.ap__table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ap__table th,
+.ap__table td {
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--row-border);
+  font-size: 0.875rem;
+}
+
+.ap__table th { background: var(--subtle-bg); font-weight: 600; }
+
+.ap__mono { font-family: monospace; font-size: 0.82em; }
+
+.ap__action-code {
+  background: var(--subtle-bg);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.82em;
+}
+
+/* ── Badges ────────────────────────────────────────────────── */
+.ap__badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ap__badge--active   { background: #d4edda; color: #155724; }
+.ap__badge--inactive { background: #f8d7da; color: #721c24; }
+
+:root[data-theme='dark'] .ap__badge--active   { background: #1a3d27; color: #6fcf97; }
+:root[data-theme='dark'] .ap__badge--inactive { background: #3d1a1e; color: #f48a8a; }
+
+/* ── Action buttons ────────────────────────────────────────── */
+.ap__deactivate-btn {
+  padding: 0.25rem 0.7rem;
+  font-size: 0.78rem;
+  color: var(--error);
+  border-color: var(--error);
+}
+.ap__deactivate-btn:hover:not(:disabled) { background: var(--error-bg); }
+.ap__deactivate-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.ap__cleanup-btn { margin-top: 0.25rem; }
+.ap__cleanup-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ── Mobile cards ──────────────────────────────────────────── */
+.ap__cards { display: none; list-style: none; padding: 0; margin: 0; }
+
+@media (max-width: 639px) {
+  .ap__table-wrap { display: none; }
+
+  .ap__cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .ap__card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.875rem 1rem;
+  }
+
+  .ap__card dl { display: grid; grid-template-columns: 1fr; gap: 0.45rem; }
+
+  .ap__card-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--row-border);
+    padding-bottom: 0.35rem;
+  }
+
+  .ap__card-row:last-child { border-bottom: none; padding-bottom: 0; }
+
+  .ap__card dt {
+    font-weight: 600;
+    font-size: 0.78rem;
+    color: var(--muted-text);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+
+  .ap__card dd { text-align: right; font-size: 0.875rem; }
+
+  .ap__stats-grid { grid-template-columns: 1fr 1fr; }
+  .ap__nav ul { gap: 0.3rem; }
+  .ap__nav button[role="tab"] { padding: 0.35rem 0.6rem; font-size: 0.8rem; }
+}

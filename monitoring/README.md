@@ -57,6 +57,7 @@ hard-coded in source.
 | `CONTRACT_ID` | *(required)* | Deployed contract address to monitor |
 | `HORIZON_URL` | `https://horizon-testnet.stellar.org` | Horizon base URL |
 | `POLL_INTERVAL_MS` | `15000` | How often to poll Horizon (ms) |
+| `PING_INTERVAL_MS` | `300000` | How often to call the contract `ping` health check (ms, default 5 min) |
 | `REFUND_RATE_THRESHOLD` | `0.20` | Refund rate alert threshold (0–1) |
 | `REFUND_RATE_WINDOW_MS` | `3600000` | Rolling window for rate metrics (ms) |
 | `LARGE_PAYMENT_THRESHOLD` | `1000000000` | Single-payment alert threshold (token units) |
@@ -69,6 +70,7 @@ hard-coded in source.
 CONTRACT_ID=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4
 HORIZON_URL=https://horizon.stellar.org
 POLL_INTERVAL_MS=15000
+PING_INTERVAL_MS=300000
 REFUND_RATE_THRESHOLD=0.20
 REFUND_RATE_WINDOW_MS=3600000
 LARGE_PAYMENT_THRESHOLD=1000000000
@@ -89,6 +91,39 @@ CONTRACT_ID=<your-contract-id> \
 HORIZON_URL=https://horizon.stellar.org \
 npm start
 ```
+
+---
+
+## Health Check — `ping` (BE-007)
+
+The monitor calls the contract's read-only `ping(env) -> u64` function every
+**5 minutes** (default) to verify the contract is live and responsive without
+making any state-mutating call.
+
+A successful ping logs:
+
+```
+[monitor] ping OK — latest ledger #12345678 closed_at=2026-10-21T22:29:11Z (timestamp=1761083351)
+```
+
+If the ping fails (network error, Horizon unreachable, or the contract is
+unresponsive), the monitor fires a `ping_failed` alert and continues running.
+
+You can also call ping directly from the CLI:
+
+```bash
+stellar contract invoke \
+  --id $CONTRACT_ID \
+  --source-account <KEY> \
+  --network testnet \
+  -- ping
+```
+
+The returned `u64` is the ledger `close_time` in Unix seconds. Compare it
+against wall-clock time to detect severely stale ledger heads.
+
+Adjust the ping interval via the `PING_INTERVAL_MS` environment variable
+(default: `300000` ms = 5 minutes).
 
 ---
 

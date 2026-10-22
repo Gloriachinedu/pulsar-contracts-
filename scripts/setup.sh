@@ -25,6 +25,31 @@ success() { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
+# ── Portable version comparison ───────────────────────────────────────────────
+# Returns 0 (true) if $1 >= $2, 1 (false) otherwise.
+#
+# We deliberately avoid `sort -V` here because the BSD `sort` shipped with
+# macOS does not support the `-V` (version) flag — only GNU coreutils does.
+# Using `sort -V` would make the script fail on stock macOS, contradicting
+# the "tested on Ubuntu and macOS" acceptance criterion of issue DO-009.
+# This arithmetic comparison works on any POSIX-ish shell (bash) without
+# external tools.
+version_ge() {
+  local major1 minor1 patch1 major2 minor2 patch2
+  IFS='.' read -r major1 minor1 patch1 <<< "$1"
+  IFS='.' read -r major2 minor2 patch2 <<< "$2"
+  major1="${major1:-0}"; minor1="${minor1:-0}"; patch1="${patch1:-0}"
+  major2="${major2:-0}"; minor2="${minor2:-0}"; patch2="${patch2:-0}"
+
+  if [ "$major1" -gt "$major2" ]; then return 0; fi
+  if [ "$major1" -lt "$major2" ]; then return 1; fi
+  if [ "$minor1" -gt "$minor2" ]; then return 0; fi
+  if [ "$minor1" -lt "$minor2" ]; then return 1; fi
+  if [ "$patch1" -gt "$patch2" ]; then return 0; fi
+  if [ "$patch1" -lt "$patch2" ]; then return 1; fi
+  return 0  # equal counts as >=
+}
+
 # ── Platform detection ────────────────────────────────────────────────────────
 OS="$(uname -s)"
 case "$OS" in
@@ -104,9 +129,9 @@ check_rust_version() {
   REQUIRED="1.79.0"
   CURRENT="$(rustc --version | awk '{print $2}')"
 
-  # Simple semver comparison using sort -V
-  LOWEST="$(printf '%s\n%s' "$REQUIRED" "$CURRENT" | sort -V | head -1)"
-  if [ "$LOWEST" = "$REQUIRED" ]; then
+  # Use the portable version_ge helper instead of `sort -V` so this works
+  # on macOS (BSD sort) as well as Linux (GNU coreutils).
+  if version_ge "$CURRENT" "$REQUIRED"; then
     success "Rust version $CURRENT meets minimum requirement ($REQUIRED)"
   else
     warn "Rust version $CURRENT is below the minimum required version $REQUIRED."

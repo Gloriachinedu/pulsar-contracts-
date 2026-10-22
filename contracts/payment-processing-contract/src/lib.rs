@@ -22,6 +22,8 @@ mod types;
 mod repro_tests;
 #[cfg(test)]
 mod prop_tests;
+#[cfg(test)]
+mod payer_payment_history_tests;
 
 use alloc::vec::Vec as RustVec;
 use soroban_sdk::{
@@ -32,8 +34,8 @@ use error::PaymentError;
 use storage::{REFUND_GRACE_BUFFER, REFUND_WINDOW};
 use types::{
     DataKey, GlobalStats, Merchant, MerchantCategory, MerchantStats, MultisigPayment,
-    PaymentFilter, PaymentOrder, PaymentPage, PaymentRecord, PaymentStatus, RefundRecord,
-    RefundStatus, SortField, SortOrder,
+    PaymentFilter, PaymentOrder, PaymentPage, PaymentReceipt, PaymentRecord, PaymentStatus,
+    RefundRecord, RefundStatus, SortField, SortOrder,
 };
 
 #[contract]
@@ -63,17 +65,60 @@ impl PaymentContract {
         Ok(())
     }
 
-    /// Upgrade the contract WASM in-place. Admin only.
+    /// Transfer admin authority to a new address (two-step handoff).
     ///
-    /// Existing storage and the contract address are preserved across the upgrade.
+    /// Both the current admin and the new admin must authorise this call,
+    /// ensuring the new admin key is live and in possession of the caller.
     ///
     /// # Parameters
-    /// - `admin` — The admin address; must be authenticated.
-    /// - `new_wasm_hash` — 32-byte hash of the new WASM binary as returned by
-    ///   `stellar contract upload`.
+    /// - `current_admin` — The existing admin address; must be authenticated
+    ///   and must match the stored admin.
+    /// - `new_admin` — The incoming admin address; must also authenticate,
+    ///   proving key possession before the transfer is committed.
+    ///
+    /// # Events
+    /// Emits `admin_transferred` with payload `(current_admin, new_admin)`.
     ///
     /// # Errors
-    /// - [`PaymentError::Unauthorized`] if `admin` is not the stored admin.
+    /// - [`PaymentError::Unauthorized`] if `current_admin` is not the stored admin.
+    /// - [`PaymentError::InvalidInput`] if `new_admin` is the zero/burn address.
+    pub fn transfer_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
+        // Require auth from both parties — proves the new key is live.
+        current_admin.require_auth();
+        new_admin.require_auth();
+        helper::validate_admin_address(&env, &new_admin)?;
+        // Verify current_admin is actually the stored admin.
+        let stored = storage::get_admin(&env).ok_or(PaymentError::Unauthorized)?;
+        if stored != current_admin {
+            return Err(PaymentError::Unauthorized);
+        }
+        // Update single-admin storage.
+        storage::set_admin(&env, &new_admin);
+        // If a multi-admin config exists, replace the old admin entry with the new one.
+        if let Some(mut config) = storage::get_admin_config(&env) {
+            let mut new_admins = Vec::new(&env);
+            for addr in config.admins.iter() {
+                if addr == current_admin {
+                    new_admins.push_back(new_admin.clone());
+                } else {
+                    new_admins.push_back(addr);
+                }
+            }
+            config.admins = new_admins;
+            storage::set_admin_config(&env, &config);
+        }
+        env.events().publish(
+            (String::from_str(&env, "admin_transferred"),),
+            (current_admin, new_admin),
+        );
+        Ok(())
+    }
+
     pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
         helper::require_admin(&env, &admin)?;
@@ -81,16 +126,91 @@ impl PaymentContract {
         Ok(())
     }
 
-    /// Return the current contract version number.
+    /// Update the admin set and signing threshold.
     ///
-    /// The version is set to `1` on first initialisation and incremented on
-    /// each successful `upgrade` call.
+    /// Requires the existing threshold of currently-registered admins to
+    /// authorise the change (i.e., the change itself must pass multi-sig).
+    /// This prevents a single compromised key from unilaterally replacing
+    /// the full admin set.
     ///
-    /// # Returns
-    /// A `u32` version counter stored in instance storage.
+    /// # Parameters
+    /// - `current_admins` — Addresses of the admins authorising this change.
+    ///   Must satisfy the current threshold.
+    /// - `new_admins` — The new admin address list.
+    /// - `new_threshold` — The new signing threshold (1 ≤ threshold ≤ len(new_admins)).
+    ///
+    /// # Errors
+    /// - [`PaymentError::Unauthorized`] if `current_admins` does not satisfy
+    ///   the current threshold.
+    /// - [`PaymentError::InvalidInput`] if `new_admins` is empty, or
+    ///   `new_threshold` is zero or greater than the number of new admins.
+    pub fn update_admin_config(
+        env: Env,
+        current_admins: Vec<Address>,
+        new_admins: Vec<Address>,
+        new_threshold: u32,
+    ) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
+        // The change must be authorised by the existing multi-sig.
+        helper::require_multi_admin(&env, current_admins)?;
+        if new_admins.is_empty() {
+            return Err(PaymentError::InvalidInput);
+        }
+        if new_threshold == 0 || new_threshold as usize > new_admins.len() as usize {
+            return Err(PaymentError::InvalidInput);
+        }
+        let first = new_admins.get(0).unwrap();
+        // Keep single-admin pointer in sync with the first new admin.
+        storage::set_admin(&env, &first);
+        storage::set_admin_config(&env, &types::AdminConfig {
+            admins: new_admins.clone(),
+            threshold: new_threshold,
+        });
+        env.events().publish(
+            (String::from_str(&env, "admin_config_updated"),),
+            (new_admins, new_threshold),
+        );
+        Ok(())
+    }
+
+    /// Return the current admin configuration (admin list and threshold).
+    pub fn get_admin_config(env: Env) -> Result<types::AdminConfig, PaymentError> {
+        storage::bump_instance_ttl(&env);
+        storage::get_admin_config(&env).ok_or(PaymentError::Unauthorized)
+    }
+
     pub fn get_version(env: Env) -> u32 {
         storage::bump_instance_ttl(&env);
         storage::get_contract_version(&env)
+    }
+
+    /// Health check endpoint for monitoring systems (BE-007).
+    ///
+    /// Returns the current ledger timestamp (`env.ledger().timestamp()`), which
+    /// is the `close_time` of the most-recently closed ledger as reported by the
+    /// validator quorum.  Because this function makes **no state-mutating calls**
+    /// it is safe to invoke as frequently as needed without triggering surge
+    /// pricing or consuming write-fee budget.
+    ///
+    /// ## Recommended usage
+    ///
+    /// Off-chain monitoring systems should call `ping` every **5 minutes** via
+    /// Stellar RPC (simulation mode, no account sequence consumed):
+    ///
+    /// ```bash
+    /// stellar contract invoke --id $CONTRACT_ID --source-account <KEY> \
+    ///   --network testnet -- ping
+    /// ```
+    ///
+    /// A successful response (any `u64` value) confirms the contract is live and
+    /// accessible.  An error or timeout indicates a liveness problem.
+    ///
+    /// ## Return value
+    ///
+    /// The ledger `close_time` in Unix seconds (UTC).  Compare this value
+    /// against wall-clock time to detect severely stale ledger heads.
+    pub fn ping(env: Env) -> u64 {
+        env.ledger().timestamp()
     }
 
     /// Extend the instance storage TTL so the contract never goes dormant.
@@ -101,6 +221,50 @@ impl PaymentContract {
     /// anyone and should be invoked periodically to keep the contract alive.
     pub fn bump_instance_ttl(env: Env) {
         storage::bump_instance_ttl(&env);
+    }
+
+    // ── Emergency stop (SEC-010) ──────────────────────────────────────────────
+
+    /// Pause the contract, blocking all state-mutating operations.
+    ///
+    /// Use this as an emergency stop when a critical vulnerability is discovered
+    /// post-deployment. Read-only query functions remain accessible while paused.
+    /// Only the admin may call this function.
+    ///
+    /// # Errors
+    /// - [`PaymentError::Unauthorized`] if `admin` is not the stored admin.
+    pub fn pause(env: Env, admin: Address) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
+        helper::require_admin(&env, &admin)?;
+        storage::set_paused(&env, true);
+        env.events().publish(
+            (String::from_str(&env, "contract_paused"),),
+            admin,
+        );
+        Ok(())
+    }
+
+    /// Resume the contract after it has been paused.
+    ///
+    /// Re-enables all state-mutating operations. Only the admin may call this.
+    ///
+    /// # Errors
+    /// - [`PaymentError::Unauthorized`] if `admin` is not the stored admin.
+    pub fn unpause(env: Env, admin: Address) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
+        helper::require_admin(&env, &admin)?;
+        storage::set_paused(&env, false);
+        env.events().publish(
+            (String::from_str(&env, "contract_unpaused"),),
+            admin,
+        );
+        Ok(())
+    }
+
+    /// Returns `true` if the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        storage::bump_instance_ttl(&env);
+        storage::is_paused(&env)
     }
 
     // ── Merchant management ───────────────────────────────────────────────────
@@ -130,6 +294,7 @@ impl PaymentContract {
         signing_public_key: Option<BytesN<32>>,
     ) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         merchant_address.require_auth();
         if storage::get_merchant(&env, &merchant_address).is_some() {
             return Err(PaymentError::MerchantAlreadyRegistered);
@@ -149,6 +314,7 @@ impl PaymentContract {
             active: true,
             registered_at: env.ledger().timestamp(),
             signing_public_key,
+            tier: MerchantTier::Unverified,
         };
         storage::save_merchant(&env, &merchant);
         env.events().publish(
@@ -158,19 +324,73 @@ impl PaymentContract {
         Ok(())
     }
 
-    /// Enable or disable whitelist mode for merchant registration. Admin only.
+    /// Assign a KYC / verification tier to a merchant (MISC-012).
     ///
-    /// When whitelist mode is **enabled**, only addresses pre-approved via
-    /// `approve_merchant_registration` may call `register_merchant`. When
-    /// **disabled**, any address may register as a merchant.
+    /// All merchants start at [`MerchantTier::Unverified`] at registration.
+    /// Only an admin (via the multi-sig threshold) may upgrade or downgrade
+    /// a merchant's tier, after completing the corresponding off-chain KYC
+    /// process. See `docs/MERCHANT_TIERS.md` for tier criteria and the
+    /// upgrade process.
     ///
     /// # Parameters
-    /// - `admins` — Admin addresses that together satisfy the multi-sig threshold.
-    /// - `enabled` — `true` to enable whitelist enforcement, `false` to disable.
+    /// - `admins` — Admin addresses satisfying the multi-sig threshold.
+    /// - `merchant_address` — The merchant whose tier is being changed.
+    /// - `tier` — The new tier to assign.
     ///
     /// # Errors
-    /// - [`PaymentError::Unauthorized`] if the provided addresses do not satisfy
-    ///   the admin multi-sig threshold.
+    /// - [`PaymentError::Unauthorized`] if the admin multi-sig check fails.
+    /// - [`PaymentError::MerchantNotFound`] if the merchant does not exist.
+    ///
+    /// # Events
+    /// Emits `merchant_tier_set` with payload `(merchant_address, tier)`.
+    pub fn set_merchant_tier(
+        env: Env,
+        admins: Vec<Address>,
+        merchant_address: Address,
+        tier: MerchantTier,
+    ) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
+        helper::require_multi_admin(&env, admins)?;
+        let mut merchant = storage::get_merchant(&env, &merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+        merchant.tier = tier.clone();
+        storage::save_merchant(&env, &merchant);
+        env.events().publish(
+            (String::from_str(&env, "merchant_tier_set"),),
+            (merchant_address, tier),
+        );
+        Ok(())
+    }
+
+    /// Returns the merchant's current KYC / verification tier (MISC-012).
+    ///
+    /// # Errors
+    /// - [`PaymentError::MerchantNotFound`] if the merchant does not exist.
+    pub fn get_merchant_tier(env: Env, merchant_address: Address) -> Result<MerchantTier, PaymentError> {
+        storage::bump_instance_ttl(&env);
+        let merchant = storage::get_merchant(&env, &merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+        Ok(merchant.tier)
+    }
+
+    /// Enable or disable admin-whitelist mode for merchant registration.
+    ///
+    /// # Anti-spam mechanism (SEC-003)
+    /// When whitelist mode is **enabled**, `register_merchant` requires the
+    /// merchant address to be pre-approved by an admin before registration
+    /// succeeds. This prevents unrestricted storage spam — an attacker cannot
+    /// register unlimited merchants without admin approval, making large-scale
+    /// storage-inflation attacks economically and operationally infeasible.
+    ///
+    /// When disabled (default), any address may register freely. Enable this
+    /// mode on mainnet deployments where open registration is not desired.
+    ///
+    /// # Parameters
+    /// - `admins` — Admin addresses satisfying the multi-sig threshold.
+    /// - `enabled` — `true` to require pre-approval; `false` for open registration.
+    ///
+    /// # Errors
+    /// - [`PaymentError::Unauthorized`] if the admin multi-sig check fails.
     pub fn set_whitelist_mode(
         env: Env,
         admins: Vec<Address>,
@@ -182,18 +402,18 @@ impl PaymentContract {
         Ok(())
     }
 
-    /// Pre-approve a merchant address for registration. Admin only.
+    /// Pre-approve a merchant address for registration when whitelist mode is on.
     ///
-    /// Has no effect when whitelist mode is disabled, but the approval is
-    /// persisted so it takes effect if whitelist mode is later enabled.
+    /// Must be called by an admin before the merchant calls `register_merchant`.
+    /// Has no effect when whitelist mode is disabled (pre-approval is always
+    /// accepted in that case, acting as an early-approval for future use).
     ///
     /// # Parameters
-    /// - `admins` — Admin addresses that together satisfy the multi-sig threshold.
-    /// - `merchant_address` — The address to add to the whitelist.
+    /// - `admins` — Admin addresses satisfying the multi-sig threshold.
+    /// - `merchant_address` — Address to whitelist.
     ///
     /// # Errors
-    /// - [`PaymentError::Unauthorized`] if the provided addresses do not satisfy
-    ///   the admin multi-sig threshold.
+    /// - [`PaymentError::Unauthorized`] if the admin multi-sig check fails.
     pub fn approve_merchant_registration(
         env: Env,
         admins: Vec<Address>,
@@ -205,21 +425,147 @@ impl PaymentContract {
         Ok(())
     }
 
+    // ── Token allowlist management (SEC-009) ──────────────────────────────────
+
+    /// Enable or disable enforcement of the token allowlist.
+    ///
+    /// When enabled, any payment whose `order.token` is not on the allowlist
+    /// will be rejected with [`PaymentError::TokenNotAllowed`].
+    /// When disabled (default), any token contract address is accepted.
+    ///
+    /// Use `add_allowed_token` to populate the allowlist before enabling it.
+    ///
+    /// # Errors
+    /// - [`PaymentError::Unauthorized`] if the admin multi-sig check fails.
+    pub fn set_token_allowlist_mode(
+        env: Env,
+        admins: Vec<Address>,
+        enabled: bool,
+    ) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
+        helper::require_multi_admin(&env, admins)?;
+        storage::set_token_allowlist_enabled(&env, enabled);
+        env.events().publish(
+            (String::from_str(&env, "token_allowlist_mode_set"),),
+            enabled,
+        );
+        Ok(())
+    }
+
+    /// Add a token contract address to the admin-managed allowlist.
+    ///
+    /// Has no effect if the token is already on the allowlist.
+    /// The allowlist is only enforced when `set_token_allowlist_mode(true)`
+    /// has been called.
+    ///
+    /// # Errors
+    /// - [`PaymentError::Unauthorized`] if the admin multi-sig check fails.
+    pub fn add_allowed_token(
+        env: Env,
+        admins: Vec<Address>,
+        token: Address,
+    ) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
+        helper::require_multi_admin(&env, admins)?;
+        storage::set_token_allowed(&env, &token, true);
+        env.events().publish(
+            (String::from_str(&env, "token_allowed"),),
+            token,
+        );
+        Ok(())
+    }
+
+    /// Remove a token contract address from the admin-managed allowlist.
+    ///
+    /// After removal, payments using this token will be rejected when the
+    /// allowlist is enabled.
+    ///
+    /// # Errors
+    /// - [`PaymentError::Unauthorized`] if the admin multi-sig check fails.
+    pub fn remove_allowed_token(
+        env: Env,
+        admins: Vec<Address>,
+        token: Address,
+    ) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
+        helper::require_multi_admin(&env, admins)?;
+        storage::set_token_allowed(&env, &token, false);
+        env.events().publish(
+            (String::from_str(&env, "token_removed"),),
+            token,
+        );
+        Ok(())
+    }
+
+    /// Returns `true` when `token` is on the allowlist.
+    pub fn is_token_allowed(env: Env, token: Address) -> bool {
+        storage::bump_instance_ttl(&env);
+        storage::is_token_allowed(&env, &token)
+    }
+
     /// Deactivate a merchant, preventing new payments from being processed.
     ///
     /// Can be called by the merchant themselves or by the admin multi-sig.
     ///
     /// # Parameters
+    /// - `caller` — The address initiating the deactivation; must be authenticated.
+    ///   If `admin_authorizers` is `None`, `caller` must equal `merchant_address`.
     /// - `merchant_address` — The merchant to deactivate.
     /// - `admin_authorizers` — If `Some`, the call is treated as an admin
     ///   action and the provided addresses must satisfy the multi-sig threshold.
-    ///   If `None`, `merchant_address` must authorise the call directly.
+    ///   If `None`, `caller` must be the merchant and must authorise the call directly.
+    ///
+    /// # Events
+    /// Emits `merchant_deactivated` with payload `(merchant_address, caller)`.
     ///
     /// # Errors
     /// - [`PaymentError::MerchantNotFound`] if the merchant does not exist.
     /// - [`PaymentError::Unauthorized`] if neither the merchant nor a valid
     ///   admin multi-sig authorises the call.
     pub fn deactivate_merchant(
+        env: Env,
+        caller: Address,
+        merchant_address: Address,
+        admin_authorizers: Option<Vec<Address>>,
+    ) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
+        if let Some(admins) = admin_authorizers {
+            helper::require_multi_admin(&env, admins)?;
+        } else {
+            caller.require_auth();
+            if caller != merchant_address {
+                return Err(PaymentError::Unauthorized);
+            }
+        }
+        let mut merchant =
+            storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
+        merchant.active = false;
+        storage::save_merchant(&env, &merchant);
+        env.events().publish(
+            (String::from_str(&env, "merchant_deactivated"),),
+            (merchant_address, caller),
+        );
+        Ok(())
+    }
+
+    /// Reactivate a previously deactivated merchant.
+    ///
+    /// Allows an admin or the merchant themselves to restore an inactive merchant
+    /// to active status, preserving all existing payment history.
+    ///
+    /// # Parameters
+    /// - `merchant_address` — The merchant to reactivate.
+    /// - `admin_authorizers` — If `Some`, the call is treated as an admin
+    ///   action and the provided addresses must satisfy the multi-sig threshold.
+    ///   If `None`, `merchant_address` must authorise the call directly.
+    ///
+    /// # Errors
+    /// - [`PaymentError::MerchantNotFound`] if the merchant does not exist.
+    /// - [`PaymentError::MerchantAlreadyActive`] if the merchant is already active.
+    /// - [`PaymentError::Unauthorized`] if neither the merchant nor a valid
+    ///   admin multi-sig authorises the call.
+    pub fn reactivate_merchant(
         env: Env,
         merchant_address: Address,
         admin_authorizers: Option<Vec<Address>>,
@@ -232,10 +578,13 @@ impl PaymentContract {
         }
         let mut merchant =
             storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
-        merchant.active = false;
+        if merchant.active {
+            return Err(PaymentError::MerchantAlreadyActive);
+        }
+        merchant.active = true;
         storage::save_merchant(&env, &merchant);
         env.events().publish(
-            (String::from_str(&env, "merchant_deactivated"),),
+            (String::from_str(&env, "merchant_reactivated"),),
             merchant_address,
         );
         Ok(())
@@ -267,6 +616,7 @@ impl PaymentContract {
         description: String,
         contact_info: String,
     ) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
         merchant_address.require_auth();
         helper::validate_merchant_fields(&name, &description, &contact_info)?;
         let mut merchant =
@@ -278,6 +628,44 @@ impl PaymentContract {
         env.events().publish(
             (String::from_str(&env, "merchant_updated"),),
             (merchant_address, name, description, contact_info),
+        );
+        Ok(())
+    }
+
+    /// Bind or update the ed25519 signing key for a registered merchant.
+    ///
+    /// Separates key management from profile registration so that merchants can
+    /// rotate their signing key without re-registering. Only the merchant
+    /// themselves may call this function.
+    ///
+    /// `process_payment_with_signature` always verifies signatures against the
+    /// on-chain stored key, so updating this binding takes immediate effect.
+    ///
+    /// # Parameters
+    /// - `merchant_address` — The merchant updating their key; must be authenticated.
+    /// - `signing_public_key` — The new ed25519 public key to store. Pass `None`
+    ///   to clear the key and disable signature verification for this merchant.
+    ///
+    /// # Errors
+    /// - [`PaymentError::MerchantNotFound`] if no merchant is registered.
+    /// - [`PaymentError::MerchantInactive`] if the merchant is deactivated.
+    pub fn set_merchant_signing_key(
+        env: Env,
+        merchant_address: Address,
+        signing_public_key: Option<BytesN<32>>,
+    ) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
+        merchant_address.require_auth();
+        let mut merchant =
+            storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
+        if !merchant.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+        merchant.signing_public_key = signing_public_key;
+        storage::save_merchant(&env, &merchant);
+        env.events().publish(
+            (String::from_str(&env, "merchant_signing_key_updated"),),
+            merchant_address,
         );
         Ok(())
     }
@@ -319,18 +707,26 @@ impl PaymentContract {
         merchant_public_key: BytesN<32>,
     ) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         payer.require_auth();
         if order.payer != payer {
             return Err(PaymentError::InvalidInput);
         }
         helper::validate_amount(order.amount)?;
         helper::validate_order_id(&order.order_id)?;
+        helper::validate_metadata(&order.metadata)?;
         if storage::get_payment(&env, &order.order_id).is_some() {
             return Err(PaymentError::PaymentAlreadyExists);
         }
         let now = env.ledger().timestamp();
         if order.expires_at > 0 && now > order.expires_at {
             return Err(PaymentError::PaymentExpired);
+        }
+        // SEC-009: enforce token allowlist when enabled
+        if storage::is_token_allowlist_enabled(&env)
+            && !storage::is_token_allowed(&env, &order.token)
+        {
+            return Err(PaymentError::TokenNotAllowed);
         }
         let merchant = storage::get_merchant(&env, &order.merchant_address)
             .ok_or(PaymentError::MerchantNotFound)?;
@@ -356,6 +752,7 @@ impl PaymentContract {
             status: PaymentStatus::Completed,
             paid_at: now,
             description: order.description.clone(),
+            metadata: order.metadata.clone(),
         };
         storage::save_payment(&env, &record);
         storage::push_merchant_payment_id(&env, &order.merchant_address, &order.order_id);
@@ -363,13 +760,156 @@ impl PaymentContract {
         storage::push_global_payment_id(&env, &order.order_id);
         storage::increment_payment_stats(&env, order.amount)?;
 
-        // Commit payment state before the external token transfer to reduce
-        // re-entrancy risk in external contracts.
+        // ── Re-entrancy model (SC-011) ───────────────────────────────────────
+        // All state mutations (payment record, index updates, stats) are
+        // committed to persistent storage BEFORE the external token transfer
+        // call below. This follows the Checks-Effects-Interactions (CEI)
+        // pattern and is the primary defence against re-entrancy.
+        //
+        // Why Soroban further limits re-entrancy risk:
+        // Soroban's execution model enforces contract-level authorisation at
+        // the VM boundary. A re-entrant call from a malicious token contract
+        // back into THIS contract would require a fresh authorisation context
+        // that is not present in the current transaction. In practice:
+        //   1. `payer.require_auth()` has already been consumed for this
+        //      invocation; the same auth cannot be reused.
+        //   2. Soroban does not support call-stack re-entry into the same
+        //      contract instance within a single transaction in the same
+        //      authorisation scope.
+        //
+        // Taken together, the CEI ordering plus the Soroban execution model
+        // means that even if the token contract attempts a re-entrant call,
+        // the state it observes will already reflect the completed payment,
+        // causing any duplicate `process_payment_with_signature` call to fail
+        // with `PaymentAlreadyExists`.
         let token_client = token::Client::new(&env, &order.token);
+        // Pre-check balance to return a typed error instead of a host trap.
+        if token_client.balance(&payer) < order.amount {
+            return Err(PaymentError::InsufficientBalance);
+        }
         token_client.transfer(&payer, &order.merchant_address, &order.amount);
         env.events().publish(
             (String::from_str(&env, "payment_processed"),),
             (order.order_id, payer, order.merchant_address, order.amount),
+        );
+        Ok(())
+    }
+
+    /// Process multiple payments from the same payer in a single contract
+    /// invocation (MISC-011), avoiding the fee/latency overhead of one
+    /// transaction per payment (e.g. a marketplace collecting several
+    /// merchant payouts at once).
+    ///
+    /// Unlike [`Self::process_payment_with_signature`], batch orders are not
+    /// individually signature-verified by a merchant key; the payer alone
+    /// authorises the whole batch via `require_auth`. Signature-verified
+    /// payments should still use `process_payment_with_signature` one at a
+    /// time.
+    ///
+    /// # Atomicity
+    /// All orders in `orders` succeed or the entire call fails and every
+    /// state change (payment records, indexes, stats, and token transfers)
+    /// is rolled back. This holds because `process_batch_payments` is a
+    /// single contract entry point: returning `Err` for any order aborts
+    /// the whole host invocation, and the Soroban host reverts all ledger
+    /// writes performed during a failed invocation. There is no partial
+    /// commit path.
+    ///
+    /// # Parameters
+    /// - `payer` — The paying address; must be authenticated once for the
+    ///   whole batch.
+    /// - `orders` — The payment orders to process, in order. Each order's
+    ///   `payer` field must equal `payer`.
+    ///
+    /// # Errors
+    /// - [`PaymentError::InvalidInput`] if `orders` is empty or exceeds
+    ///   [`storage::MAX_BATCH_PAYMENTS`].
+    /// - Any error that [`Self::process_payment_with_signature`]-style
+    ///   per-order validation can return (e.g. [`PaymentError::InvalidAmount`],
+    ///   [`PaymentError::PaymentAlreadyExists`], [`PaymentError::MerchantNotFound`],
+    ///   [`PaymentError::MerchantInactive`], [`PaymentError::TokenNotAllowed`],
+    ///   [`PaymentError::PaymentExpired`], [`PaymentError::InsufficientBalance`])
+    ///   for any single order aborts the entire batch.
+    pub fn process_batch_payments(
+        env: Env,
+        payer: Address,
+        orders: Vec<PaymentOrder>,
+    ) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) {
+            return Err(PaymentError::ContractPaused);
+        }
+        payer.require_auth();
+
+        if orders.is_empty() || orders.len() > storage::MAX_BATCH_PAYMENTS {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        let now = env.ledger().timestamp();
+        let allowlist_enabled = storage::is_token_allowlist_enabled(&env);
+
+        for order in orders.iter() {
+            if order.payer != payer {
+                return Err(PaymentError::InvalidInput);
+            }
+            helper::validate_amount(order.amount)?;
+            helper::validate_order_id(&order.order_id)?;
+            if storage::get_payment(&env, &order.order_id).is_some() {
+                return Err(PaymentError::PaymentAlreadyExists);
+            }
+            if order.expires_at > 0 && now > order.expires_at {
+                return Err(PaymentError::PaymentExpired);
+            }
+            // SEC-009: enforce token allowlist when enabled
+            if allowlist_enabled && !storage::is_token_allowed(&env, &order.token) {
+                return Err(PaymentError::TokenNotAllowed);
+            }
+            let merchant = storage::get_merchant(&env, &order.merchant_address)
+                .ok_or(PaymentError::MerchantNotFound)?;
+            if !merchant.active {
+                return Err(PaymentError::MerchantInactive);
+            }
+
+            let record = PaymentRecord {
+                order_id: order.order_id.clone(),
+                merchant_address: order.merchant_address.clone(),
+                payer: payer.clone(),
+                token: order.token.clone(),
+                amount: order.amount,
+                refunded_amount: 0,
+                pending_refund_amount: 0,
+                status: PaymentStatus::Completed,
+                paid_at: now,
+                description: order.description.clone(),
+            };
+            storage::save_payment(&env, &record);
+            storage::push_merchant_payment_id(&env, &order.merchant_address, &order.order_id);
+            storage::push_payer_payment_id(&env, &payer, &order.order_id);
+            storage::push_global_payment_id(&env, &order.order_id);
+            storage::increment_payment_stats(&env, order.amount)?;
+
+            // Same CEI ordering as process_payment_with_signature (SC-011):
+            // all storage writes above happen before the external token
+            // transfer below.
+            let token_client = token::Client::new(&env, &order.token);
+            if token_client.balance(&payer) < order.amount {
+                return Err(PaymentError::InsufficientBalance);
+            }
+            token_client.transfer(&payer, &order.merchant_address, &order.amount);
+            env.events().publish(
+                (String::from_str(&env, "payment_processed"),),
+                (
+                    order.order_id.clone(),
+                    payer.clone(),
+                    order.merchant_address.clone(),
+                    order.amount,
+                ),
+            );
+        }
+
+        env.events().publish(
+            (String::from_str(&env, "batch_payment_processed"),),
+            (payer, orders.len()),
         );
         Ok(())
     }
@@ -410,6 +950,43 @@ impl PaymentContract {
             return Err(PaymentError::Unauthorized);
         }
         Ok(record)
+    }
+
+    /// Return the on-chain data needed to render a payment receipt
+    /// (see docs/RECEIPT_FORMAT.md for the full field list and the format
+    /// an off-chain service should use to turn this into a PDF).
+    ///
+    /// Access control mirrors [`Self::get_payment_by_id`]: only the payer,
+    /// the merchant, or an admin may request a receipt for a payment.
+    ///
+    /// # Parameters
+    /// - `caller` — The address requesting the receipt; must be authenticated.
+    /// - `order_id` — The unique order identifier.
+    ///
+    /// # Errors
+    /// - [`PaymentError::PaymentNotFound`] if no payment exists for `order_id`.
+    /// - [`PaymentError::MerchantNotFound`] if the merchant record referenced
+    ///   by the payment is missing (should not happen in practice).
+    /// - [`PaymentError::Unauthorized`] if `caller` is not the payer, merchant,
+    ///   or an admin.
+    pub fn get_payment_receipt(
+        env: Env,
+        caller: Address,
+        order_id: Bytes,
+    ) -> Result<PaymentReceipt, PaymentError> {
+        let record = Self::get_payment_by_id(env.clone(), caller, order_id)?;
+        let merchant = storage::get_merchant(&env, &record.merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+        Ok(PaymentReceipt {
+            order_id: record.order_id,
+            amount: record.amount,
+            token: record.token,
+            merchant_address: record.merchant_address,
+            merchant_name: merchant.name,
+            payer: record.payer,
+            status: record.status,
+            paid_at: record.paid_at,
+        })
     }
 
     /// Return a paginated, filtered, and sorted list of payments for a merchant.
@@ -667,6 +1244,7 @@ impl PaymentContract {
         order_id: Bytes,
     ) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         helper::require_multi_admin(&env, admins)?;
         let record = storage::get_payment(&env, &order_id).ok_or(PaymentError::PaymentNotFound)?;
         // Mark the order_id as archived (tombstone) to prevent replay
@@ -709,6 +1287,7 @@ impl PaymentContract {
     /// - [`PaymentError::Unauthorized`] if the admin multi-sig check fails.
     pub fn cleanup_expired_payments(env: Env, admins: Vec<Address>) -> Result<u32, PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         helper::require_multi_admin(&env, admins)?;
         let period = storage::get_cleanup_period(&env);
         let now = env.ledger().timestamp();
@@ -747,6 +1326,7 @@ impl PaymentContract {
         period: u64,
     ) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         helper::require_multi_admin(&env, admins)?;
         if period == 0 {
             return Err(PaymentError::InvalidInput);
@@ -770,6 +1350,7 @@ impl PaymentContract {
         expiry: u64,
     ) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         helper::require_multi_admin(&env, admins)?;
         if expiry < 3600 {
             return Err(PaymentError::InvalidInput);
@@ -812,6 +1393,7 @@ impl PaymentContract {
         reason: String,
     ) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         caller.require_auth();
         helper::validate_amount(amount)?;
         if reason.len() > 256 {
@@ -891,6 +1473,7 @@ impl PaymentContract {
         admin_authorizers: Option<Vec<Address>>,
     ) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         let mut refund =
             storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)?;
         let record =
@@ -938,6 +1521,7 @@ impl PaymentContract {
         admin_authorizers: Option<Vec<Address>>,
     ) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         let mut refund =
             storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)?;
         let record =
@@ -991,6 +1575,7 @@ impl PaymentContract {
     /// - [`PaymentError::Unauthorized`] if `caller` is not the merchant.
     pub fn execute_refund(env: Env, caller: Address, refund_id: Bytes) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         caller.require_auth();
         let mut refund =
             storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)?;
@@ -1016,11 +1601,30 @@ impl PaymentContract {
         storage::push_all_refund_id(&env, &refund_id);
         storage::decrement_order_refund_count(&env, &refund.order_id);
         storage::increment_refund_stats(&env, refund.amount)?;
+
+        // ── Re-entrancy model (SC-011) ───────────────────────────────────────
+        // All state mutations (payment record update, refund status, stats)
+        // are committed to persistent storage BEFORE the external token
+        // transfer below. This is the CEI (Checks-Effects-Interactions)
+        // pattern. If a malicious token contract attempts to re-enter
+        // execute_refund, the refund status is already Completed and the
+        // call will fail with RefundNotApproved. See the identical comment
+        // in process_payment_with_signature for a full explanation of the
+        // Soroban execution model and why re-entrancy is further constrained
+        // at the VM level.
         let token_client = token::Client::new(&env, &record.token);
+        // Pre-check merchant balance to return a typed error instead of a host trap.
+        if token_client.balance(&record.merchant_address) < refund.amount {
+            return Err(PaymentError::InsufficientBalance);
+        }
         token_client.transfer(&record.merchant_address, &record.payer, &refund.amount);
         env.events().publish(
             (String::from_str(&env, "refund_executed"),),
             (refund_id, refund.amount),
+        );
+        env.events().publish(
+            (String::from_str(&env, "payment_status_updated"),),
+            (record.order_id, record.status, caller),
         );
         Ok(())
     }
@@ -1078,19 +1682,30 @@ impl PaymentContract {
         required_signers: Vec<Address>,
     ) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         initiator.require_auth();
         helper::validate_amount(order.amount)?;
+        helper::validate_metadata(&order.metadata)?;
         if storage::get_multisig(&env, &payment_id).is_some() {
             return Err(PaymentError::PaymentAlreadyExists);
         }
         if required_signers.is_empty() || required_signers.len() > storage::MAX_SIGNERS {
             return Err(PaymentError::InvalidInput);
         }
+        // SEC-009: enforce token allowlist when enabled
+        if storage::is_token_allowlist_enabled(&env)
+            && !storage::is_token_allowed(&env, &order.token)
+        {
+            return Err(PaymentError::TokenNotAllowed);
+        }
         let merchant = storage::get_merchant(&env, &order.merchant_address)
             .ok_or(PaymentError::MerchantNotFound)?;
         if !merchant.active {
             return Err(PaymentError::MerchantInactive);
         }
+        // T-008: Reject duplicate signers so a single address cannot satisfy
+        // the full threshold alone.
+        // See: https://github.com/queenannaE/pulsar-contracts/issues/38
         let mut unique_signers = Vec::new(&env);
         for signer in required_signers.iter() {
             if unique_signers.contains(&signer) {
@@ -1141,6 +1756,7 @@ impl PaymentContract {
         payment_id: Bytes,
     ) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         signer.require_auth();
         let mut ms =
             storage::get_multisig(&env, &payment_id).ok_or(PaymentError::MultisigNotFound)?;
@@ -1186,6 +1802,7 @@ impl PaymentContract {
         payment_id: Bytes,
     ) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         executor.require_auth();
         let mut ms =
             storage::get_multisig(&env, &payment_id).ok_or(PaymentError::MultisigNotFound)?;
@@ -1217,6 +1834,7 @@ impl PaymentContract {
             status: PaymentStatus::Completed,
             paid_at: now,
             description: order.description.clone(),
+            metadata: order.metadata.clone(),
         };
         storage::save_payment(&env, &record);
         storage::push_merchant_payment_id(&env, &order.merchant_address, &order.order_id);
@@ -1246,6 +1864,7 @@ impl PaymentContract {
         refund_id: Bytes,
         reason: String,
     ) -> Result<(), PaymentError> {
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         caller.require_auth();
 
         if reason.len() > 256 {
@@ -1290,6 +1909,7 @@ impl PaymentContract {
         refund_id: Bytes,
         approve: bool,
     ) -> Result<(), PaymentError> {
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         helper::require_multi_admin(&env, admins.clone())?;
 
         let mut refund =
@@ -1436,6 +2056,7 @@ impl PaymentContract {
         plan: types::SubscriptionPlan,
     ) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         payer.require_auth();
         if plan.interval == 0 {
             return Err(PaymentError::InvalidInput);
@@ -1483,6 +2104,7 @@ impl PaymentContract {
         subscription_id: Bytes,
     ) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         caller.require_auth();
         let mut sub = storage::get_subscription(&env, &subscription_id)
             .ok_or(PaymentError::SubscriptionNotFound)?;
@@ -1524,6 +2146,7 @@ impl PaymentContract {
         subscription_id: Bytes,
     ) -> Result<(), PaymentError> {
         storage::bump_instance_ttl(&env);
+        if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         caller.require_auth();
         let mut sub = storage::get_subscription(&env, &subscription_id)
             .ok_or(PaymentError::SubscriptionNotFound)?;
@@ -1539,6 +2162,12 @@ impl PaymentContract {
         // elapsed.
         if sub.last_charged_at > 0 && now < sub.last_charged_at + sub.plan.interval {
             return Err(PaymentError::SubscriptionIntervalNotElapsed);
+        }
+        // SEC-009: enforce token allowlist when enabled
+        if storage::is_token_allowlist_enabled(&env)
+            && !storage::is_token_allowed(&env, &sub.plan.token)
+        {
+            return Err(PaymentError::TokenNotAllowed);
         }
         // Transfer funds from payer to merchant before updating state so that a
         // failed transfer leaves the subscription record unchanged.
