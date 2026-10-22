@@ -184,6 +184,35 @@ impl PaymentContract {
         storage::get_contract_version(&env)
     }
 
+    /// Health check endpoint for monitoring systems (BE-007).
+    ///
+    /// Returns the current ledger timestamp (`env.ledger().timestamp()`), which
+    /// is the `close_time` of the most-recently closed ledger as reported by the
+    /// validator quorum.  Because this function makes **no state-mutating calls**
+    /// it is safe to invoke as frequently as needed without triggering surge
+    /// pricing or consuming write-fee budget.
+    ///
+    /// ## Recommended usage
+    ///
+    /// Off-chain monitoring systems should call `ping` every **5 minutes** via
+    /// Stellar RPC (simulation mode, no account sequence consumed):
+    ///
+    /// ```bash
+    /// stellar contract invoke --id $CONTRACT_ID --source-account <KEY> \
+    ///   --network testnet -- ping
+    /// ```
+    ///
+    /// A successful response (any `u64` value) confirms the contract is live and
+    /// accessible.  An error or timeout indicates a liveness problem.
+    ///
+    /// ## Return value
+    ///
+    /// The ledger `close_time` in Unix seconds (UTC).  Compare this value
+    /// against wall-clock time to detect severely stale ledger heads.
+    pub fn ping(env: Env) -> u64 {
+        env.ledger().timestamp()
+    }
+
     /// Extend the instance storage TTL so the contract never goes dormant.
     ///
     /// Instance storage holds Admin, GlobalStats, CleanupPeriod, and
