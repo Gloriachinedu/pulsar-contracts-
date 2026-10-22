@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! T-011 — Property-based tests using `proptest`.
 //!
 //! These tests encode formal correctness properties for the three functions

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 use soroban_sdk::{Env, String};
 
 #[derive(Clone, Debug, Eq, PartialEq)]

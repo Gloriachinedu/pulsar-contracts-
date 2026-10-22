@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /// Data Archival Module
 /// 
 /// Implements a strategy for archiving old payment records to optimize database performance
