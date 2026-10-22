@@ -13,7 +13,7 @@ use soroban_sdk::{
 
 use crate::{
     error::PaymentError,
-    types::{MerchantCategory, PaymentOrder, SortField, SortOrder},
+    types::{MerchantCategory, MerchantTier, PaymentOrder, SortField, SortOrder},
     PaymentContract, PaymentContractClient,
 };
 
@@ -50,6 +50,7 @@ fn make_order(env: &Env, merchant: &Address, payer: &Address, token: &Address) -
         amount: 1000,
         description: str(env, "Test order"),
         expires_at: 0,
+        metadata: None,
     }
 }
 
@@ -121,6 +122,7 @@ fn test_multisig_escrow_deducted_at_initiation() {
         amount: 1000,
         description: str(&env, "Multisig escrow test"),
         expires_at: 0,
+        metadata: None,
     };
     let mut signers = Vec::new(&env);
     signers.push_back(signer1.clone());
@@ -169,7 +171,7 @@ fn test_initiate_multisig_duplicate_signer_fails() {
     client.set_admin(&admins(&env, &admin), &1);
     client.register_merchant(&merchant, &str(&env, "Store"), &str(&env, "desc"), &str(&env, "c@c.com"), &MerchantCategory::Retail, &None);
     mint(&env, &token, &signer1, 5000);
-    let order = PaymentOrder { order_id: bytes(&env, "MS_DUP"), merchant_address: merchant.clone(), payer: signer1.clone(), token: token.clone(), amount: 1000, description: str(&env, "Multisig order"), expires_at: 0 };
+    let order = PaymentOrder { order_id: bytes(&env, "MS_DUP"), merchant_address: merchant.clone(), payer: signer1.clone(), token: token.clone(), amount: 1000, description: str(&env, "Multisig order"), expires_at: 0, metadata: None };
     let mut signers = Vec::new(&env);
     signers.push_back(signer1.clone());
     signers.push_back(signer1.clone());
@@ -267,6 +269,7 @@ fn test_multisig_expiry_blocks_sign() {
         amount: 1000,
         description: str(&env, "Multisig expiry sign test"),
         expires_at: 0,
+        metadata: None,
     };
     let mut signers = Vec::new(&env);
     signers.push_back(signer1.clone());
@@ -298,6 +301,7 @@ fn test_multisig_expiry_blocks_execute() {
         amount: 1000,
         description: str(&env, "Multisig expiry execute test"),
         expires_at: 0,
+        metadata: None,
     };
     let mut signers = Vec::new(&env);
     signers.push_back(signer1.clone());
@@ -331,6 +335,7 @@ fn test_multisig_within_expiry_succeeds() {
         amount: 1000,
         description: str(&env, "Multisig within expiry"),
         expires_at: 0,
+        metadata: None,
     };
     let mut signers = Vec::new(&env);
     signers.push_back(signer1.clone());
@@ -672,4 +677,62 @@ fn test_rejected_refund_releases_pending_amount() {
     client.initiate_refund(&payer, &bytes(&env, "R_REL_2"), &order.order_id, &400, &str(&env, "now unblocked"));
     let record2 = client.get_payment_by_id(&payer, &order.order_id);
     assert_eq!(record2.pending_refund_amount, 400);
+}
+
+// MISC-012: Merchant KYC / verification tier system.
+//
+// Every merchant must start at `Unverified` on registration, and only an
+// admin (via the multi-sig threshold) may change a merchant's tier.
+#[test]
+fn test_misc012_new_merchant_defaults_to_unverified() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admins(&env, &admin), &1);
+    client.register_merchant(&merchant, &str(&env, "M"), &str(&env, "D"), &str(&env, "E"), &MerchantCategory::Retail, &None);
+
+    assert_eq!(client.get_merchant_tier(&merchant), MerchantTier::Unverified);
+}
+
+#[test]
+fn test_misc012_admin_can_upgrade_merchant_tier() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admins(&env, &admin), &1);
+    client.register_merchant(&merchant, &str(&env, "M"), &str(&env, "D"), &str(&env, "E"), &MerchantCategory::Retail, &None);
+
+    client.set_merchant_tier(&admins(&env, &admin), &merchant, &MerchantTier::Verified);
+    assert_eq!(client.get_merchant_tier(&merchant), MerchantTier::Verified);
+
+    client.set_merchant_tier(&admins(&env, &admin), &merchant, &MerchantTier::Premium);
+    assert_eq!(client.get_merchant_tier(&merchant), MerchantTier::Premium);
+}
+
+#[test]
+fn test_misc012_set_tier_unauthorized_without_admin_quorum() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admins(&env, &admin), &1);
+    client.register_merchant(&merchant, &str(&env, "M"), &str(&env, "D"), &str(&env, "E"), &MerchantCategory::Retail, &None);
+
+    assert_eq!(
+        client.try_set_merchant_tier(&admins(&env, &stranger), &merchant, &MerchantTier::Premium),
+        Err(Ok(PaymentError::Unauthorized))
+    );
+}
+
+#[test]
+fn test_misc012_set_tier_unknown_merchant_not_found() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let unregistered = Address::generate(&env);
+    client.set_admin(&admins(&env, &admin), &1);
+
+    assert_eq!(
+        client.try_set_merchant_tier(&admins(&env, &admin), &unregistered, &MerchantTier::Verified),
+        Err(Ok(PaymentError::MerchantNotFound))
+    );
 }

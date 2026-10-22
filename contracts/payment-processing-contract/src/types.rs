@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-use soroban_sdk::{contracttype, Address, Bytes, BytesN, String, Vec};
+use soroban_sdk::{contracttype, Address, Bytes, BytesN, Map, String, Vec};
 
 // ── Merchant ──────────────────────────────────────────────────────────────────
 
@@ -14,6 +14,27 @@ pub enum MerchantCategory {
     Other,
 }
 
+/// Merchant KYC / verification tier (MISC-012).
+///
+/// All merchants start at `Unverified` on registration. An admin (via the
+/// multi-sig threshold, see `helper::require_multi_admin`) can upgrade a
+/// merchant to `Verified` or `Premium` as they complete off-chain KYC. See
+/// `docs/MERCHANT_TIERS.md` for the tier criteria and upgrade process.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MerchantTier {
+    /// Default tier for every newly registered merchant. No KYC has been
+    /// performed; the merchant is trusted only to the extent the contract
+    /// trusts any registered address.
+    Unverified,
+    /// Merchant has completed baseline off-chain identity verification.
+    Verified,
+    /// Merchant has completed enhanced verification (e.g. for high-volume
+    /// or regulated-market use) and may be eligible for higher per-transaction
+    /// limits in a future revision.
+    Premium,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Merchant {
@@ -25,6 +46,9 @@ pub struct Merchant {
     pub active: bool,
     pub registered_at: u64,
     pub signing_public_key: Option<BytesN<32>>,
+    /// KYC / verification tier (MISC-012). Defaults to `Unverified` at
+    /// registration and is changed only by an admin via `set_merchant_tier`.
+    pub tier: MerchantTier,
 }
 
 // ── Payment ───────────────────────────────────────────────────────────────────
@@ -51,6 +75,11 @@ pub struct PaymentOrder {
     /// This special-case is relied upon by existing integrations and is
     /// intentionally accepted by the contract.
     pub expires_at: u64,
+    /// Optional structured metadata (e.g. customer ID, product SKU) that
+    /// merchants can attach to a payment for off-chain reconciliation.
+    /// The combined size of all keys and values is capped at
+    /// `helper::MAX_METADATA_SIZE_BYTES` (see MISC-013).
+    pub metadata: Option<Map<String, String>>,
 }
 
 #[contracttype]
@@ -66,6 +95,8 @@ pub struct PaymentRecord {
     pub status: PaymentStatus,
     pub paid_at: u64,
     pub description: String,
+    /// Metadata carried over from the originating [`PaymentOrder`], if any.
+    pub metadata: Option<Map<String, String>>,
 }
 
 /// On-chain data source for a payer/merchant-facing payment receipt

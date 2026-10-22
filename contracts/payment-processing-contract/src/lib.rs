@@ -285,6 +285,7 @@ impl PaymentContract {
             active: true,
             registered_at: env.ledger().timestamp(),
             signing_public_key,
+            tier: MerchantTier::Unverified,
         };
         storage::save_merchant(&env, &merchant);
         env.events().publish(
@@ -292,6 +293,55 @@ impl PaymentContract {
             merchant_address,
         );
         Ok(())
+    }
+
+    /// Assign a KYC / verification tier to a merchant (MISC-012).
+    ///
+    /// All merchants start at [`MerchantTier::Unverified`] at registration.
+    /// Only an admin (via the multi-sig threshold) may upgrade or downgrade
+    /// a merchant's tier, after completing the corresponding off-chain KYC
+    /// process. See `docs/MERCHANT_TIERS.md` for tier criteria and the
+    /// upgrade process.
+    ///
+    /// # Parameters
+    /// - `admins` — Admin addresses satisfying the multi-sig threshold.
+    /// - `merchant_address` — The merchant whose tier is being changed.
+    /// - `tier` — The new tier to assign.
+    ///
+    /// # Errors
+    /// - [`PaymentError::Unauthorized`] if the admin multi-sig check fails.
+    /// - [`PaymentError::MerchantNotFound`] if the merchant does not exist.
+    ///
+    /// # Events
+    /// Emits `merchant_tier_set` with payload `(merchant_address, tier)`.
+    pub fn set_merchant_tier(
+        env: Env,
+        admins: Vec<Address>,
+        merchant_address: Address,
+        tier: MerchantTier,
+    ) -> Result<(), PaymentError> {
+        storage::bump_instance_ttl(&env);
+        helper::require_multi_admin(&env, admins)?;
+        let mut merchant = storage::get_merchant(&env, &merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+        merchant.tier = tier.clone();
+        storage::save_merchant(&env, &merchant);
+        env.events().publish(
+            (String::from_str(&env, "merchant_tier_set"),),
+            (merchant_address, tier),
+        );
+        Ok(())
+    }
+
+    /// Returns the merchant's current KYC / verification tier (MISC-012).
+    ///
+    /// # Errors
+    /// - [`PaymentError::MerchantNotFound`] if the merchant does not exist.
+    pub fn get_merchant_tier(env: Env, merchant_address: Address) -> Result<MerchantTier, PaymentError> {
+        storage::bump_instance_ttl(&env);
+        let merchant = storage::get_merchant(&env, &merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+        Ok(merchant.tier)
     }
 
     /// Enable or disable admin-whitelist mode for merchant registration.
@@ -608,6 +658,7 @@ impl PaymentContract {
         }
         helper::validate_amount(order.amount)?;
         helper::validate_order_id(&order.order_id)?;
+        helper::validate_metadata(&order.metadata)?;
         if storage::get_payment(&env, &order.order_id).is_some() {
             return Err(PaymentError::PaymentAlreadyExists);
         }
@@ -645,6 +696,7 @@ impl PaymentContract {
             status: PaymentStatus::Completed,
             paid_at: now,
             description: order.description.clone(),
+            metadata: order.metadata.clone(),
         };
         storage::save_payment(&env, &record);
         storage::push_merchant_payment_id(&env, &order.merchant_address, &order.order_id);
@@ -1544,6 +1596,7 @@ impl PaymentContract {
         if storage::is_paused(&env) { return Err(PaymentError::ContractPaused); }
         initiator.require_auth();
         helper::validate_amount(order.amount)?;
+        helper::validate_metadata(&order.metadata)?;
         if storage::get_multisig(&env, &payment_id).is_some() {
             return Err(PaymentError::PaymentAlreadyExists);
         }
@@ -1692,6 +1745,7 @@ impl PaymentContract {
             status: PaymentStatus::Completed,
             paid_at: now,
             description: order.description.clone(),
+            metadata: order.metadata.clone(),
         };
         storage::save_payment(&env, &record);
         storage::push_merchant_payment_id(&env, &order.merchant_address, &order.order_id);
